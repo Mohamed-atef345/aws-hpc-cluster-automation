@@ -1,0 +1,117 @@
+# ==============================================================================
+# Terraform Core
+# ==============================================================================
+# Local .terraform directories (cached providers and modules)
+**/.terraform/*
+
+# DO track the dependency lock file for reproducible builds
+!.terraform.lock.hcl
+!**/.terraform.lock.hcl
+
+# State files & state backups
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+*.tfstate.lock.info
+
+# Execution plan files
+*.tfplan
+*.plan
+plan.cache
+
+# Crash logs & debug logs
+crash.log
+crash.*.log
+terraform.log
+*.log
+
+# Local override files
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# CLI configuration files
+.terraformrc
+terraform.rc
+
+# Terraform tooling caches
+.tflint.d/
+.checkov/
+
+# ==============================================================================
+# Secrets & Sensitive Variable Files
+# ==============================================================================
+# Variable files containing actual values/secrets
+*.tfvars
+*.tfvars.json
+**/*.tfvars
+**/*.tfvars.json
+*.auto.tfvars
+*.auto.tfvars.json
+**/*.auto.tfvars
+**/*.auto.tfvars.json
+
+# Allow committing template / example files
+!*.tfvars.example
+!**/*.tfvars.example
+!*.tfvars.sample
+!**/*.tfvars.sample
+
+# Environment variable files
+.env
+.env.*
+!.env.example
+ARCHITECTURE.md
+
+# Private keys and certificates
+*.pem
+*.key
+*.pkcs12
+*.pfx
+*.p12
+id_rsa
+id_ed25519
+
+# ==============================================================================
+# Operating System Files
+# ==============================================================================
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+Desktop.ini
+
+# Linux
+*~
+.#*
+
+# ==============================================================================
+# IDEs & Editors
+# ==============================================================================
+# VS Code / Cursor (keep shared workspace configs if needed)
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+*.code-workspace
+
+# JetBrains
+.idea/
+
+# ==============================================================================
+# Automation & Scripts (Python, Ansible)
+# ==============================================================================
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+*.retry
+
+
