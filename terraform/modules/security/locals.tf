@@ -117,6 +117,22 @@ locals {
       from_port   = 6818
       to_port     = 6818
     }
+    slurmdbd = {
+      description = "SlurmDBD accounting traffic from cluster clients"
+      target_sg   = "controller"
+      source_sg   = "cluster_client"
+      protocol    = "tcp"
+      from_port   = 6819
+      to_port     = 6819
+    }
+    srun_return = {
+      description = "Interactive srun return traffic from compute nodes"
+      target_sg   = "login"
+      source_sg   = "compute"
+      protocol    = "tcp"
+      from_port   = var.srun_port_min
+      to_port     = var.srun_port_max
+    }
     efs_nfs = {
       description = "NFS from cluster clients"
       target_sg   = "efs"

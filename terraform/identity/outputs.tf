@@ -17,3 +17,13 @@ output "instance_role_arns" {
   description = "EC2 IAM role ARNs keyed by cluster role"
   value       = module.iam.instance_role_arns
 }
+
+output "secret_arns" {
+  description = "Secrets Manager ARNs keyed by secret purpose"
+  value       = module.secrets.secret_arns
+}
+
+output "secret_names" {
+  description = "Secrets Manager names keyed by secret purpose"
+  value       = module.secrets.secret_names
+}

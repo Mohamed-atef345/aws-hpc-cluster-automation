@@ -8,11 +8,11 @@ contains reusable child modules under `modules/`.
 
 1. `network`
 2. `security`
-3. `iam`
-4. `storage`
-5. `ec2_node`
-6. `secrets`
-7. `observability`
+3. `storage`
+4. `ec2_node`
+
+Persistent IAM, instance profiles, GitHub OIDC permissions, and empty Secrets
+Manager containers are managed by the separate `identity/` root.
 
 Run Terraform from this directory:
 

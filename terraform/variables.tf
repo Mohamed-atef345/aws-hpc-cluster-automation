@@ -1,7 +1,7 @@
 variable "project_name" {
   description = "Project name used for resource names and tags"
   type        = string
-  default     = "HPCSlurmFreeipa"
+  default     = "HPCSlurmFreeIPA"
 }
 
 variable "owner" {
@@ -38,12 +38,6 @@ variable "private_subnet_cidr" {
   description = "CIDR block for all HPC cluster nodes"
   type        = string
   default     = "10.20.10.0/24"
-}
-
-
-variable "ami_id" {
-  description = "Pinned Rocky Linux 9 AMI ID"
-  type        = string
 }
 
 variable "freeipa_instance_type" {
@@ -112,4 +106,37 @@ variable "enable_dns_hostnames" {
 variable "enable_dns_support" {
   type    = bool
   default = true
+}
+
+variable "performance_mode" {
+  type    = string
+  default = "generalPurpose"
+}
+
+variable "throughput_mode" {
+  type    = string
+  default = "bursting"
+}
+
+variable "encrypted" {
+  type    = bool
+  default = true
+}
+
+variable "ami_id" {
+  description = "Pinned Rocky Linux 9 AMI ID"
+  type        = string
+  default     = "ami-07f1ef003bc5de2b1"
+}
+
+variable "compute_scratch_volume_size" {
+  description = "Scratch volume size for each compute node"
+  type        = number
+  default     = 20
+}
+
+variable "scratch_volume_type" {
+  description = "EBS volume type for compute scratch storage"
+  type        = string
+  default     = "gp3"
 }

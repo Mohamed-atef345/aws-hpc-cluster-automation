@@ -7,7 +7,7 @@ variable "aws_region" {
 variable "name_prefix" {
   description = "Prefix used for project IAM resources"
   type        = string
-  default     = "hpc-slurm-freeipa"
+  default     = "HPCSlurmFreeIPA"
 }
 
 variable "owner" {
@@ -40,4 +40,10 @@ variable "state_key" {
   description = "S3 key containing the main Terraform state"
   type        = string
   default     = "slurm-cluster-freeipa/dev/terraform.tfstate"
+}
+
+variable "identity_state_key" {
+  description = "S3 key containing the persistent identity Terraform state"
+  type        = string
+  default     = "slurm-cluster-freeipa/identity/terraform.tfstate"
 }

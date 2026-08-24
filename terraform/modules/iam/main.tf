@@ -39,13 +39,6 @@ resource "aws_iam_role_policy_attachment" "ssm" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
-resource "aws_iam_role_policy_attachment" "cloudwatch_agent" {
-  for_each = aws_iam_role.instance
-
-  role       = each.value.name
-  policy_arn = "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy"
-}
-
 resource "aws_iam_instance_profile" "instance" {
   for_each = aws_iam_role.instance
 
@@ -58,48 +51,28 @@ resource "aws_iam_instance_profile" "instance" {
   }
 }
 
-data "aws_iam_policy_document" "freeipa_secrets" {
-  count = length(var.freeipa_secret_arns) > 0 ? 1 : 0
+data "aws_iam_policy_document" "secrets" {
+  for_each = {
+    for role, secret_arns in var.secret_arns_by_role :
+    role => secret_arns if length(secret_arns) > 0
+  }
 
   statement {
-    sid = "ReadFreeIPASecrets"
+    sid = "ReadNodeSecrets"
 
     actions = [
       "secretsmanager:DescribeSecret",
       "secretsmanager:GetSecretValue",
     ]
 
-    resources = var.freeipa_secret_arns
+    resources = each.value
   }
 }
 
-resource "aws_iam_role_policy" "freeipa_secrets" {
-  count = length(var.freeipa_secret_arns) > 0 ? 1 : 0
+resource "aws_iam_role_policy" "secrets" {
+  for_each = data.aws_iam_policy_document.secrets
 
-  name   = "${var.name_prefix}-freeipa-secrets"
-  role   = aws_iam_role.instance["freeipa"].id
-  policy = data.aws_iam_policy_document.freeipa_secrets[0].json
-}
-
-data "aws_iam_policy_document" "controller_secrets" {
-  count = length(var.controller_secret_arns) > 0 ? 1 : 0
-
-  statement {
-    sid = "ReadControllerSecrets"
-
-    actions = [
-      "secretsmanager:DescribeSecret",
-      "secretsmanager:GetSecretValue",
-    ]
-
-    resources = var.controller_secret_arns
-  }
-}
-
-resource "aws_iam_role_policy" "controller_secrets" {
-  count = length(var.controller_secret_arns) > 0 ? 1 : 0
-
-  name   = "${var.name_prefix}-controller-secrets"
-  role   = aws_iam_role.instance["controller"].id
-  policy = data.aws_iam_policy_document.controller_secrets[0].json
+  name   = "${var.name_prefix}-${each.key}-secrets"
+  role   = aws_iam_role.instance[each.key].id
+  policy = each.value.json
 }

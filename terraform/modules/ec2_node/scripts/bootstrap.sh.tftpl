@@ -1,0 +1,33 @@
+#!/bin/bash
+set -euo pipefail
+
+retry() {
+  local attempts=0
+  local max_attempts=5
+
+  until "$@"; do
+    attempts=$((attempts + 1))
+
+    if (( attempts >= max_attempts )); then
+      echo "Command failed after $${max_attempts} attempts: $*" >&2
+      return 1
+    fi
+
+    echo "Command failed; retrying attempt $((attempts + 1))/$${max_attempts}..."
+    sleep $((attempts * 10))
+  done
+}
+
+if ! command -v python3 >/dev/null 2>&1; then
+  retry dnf install -y python3
+fi
+
+if ! rpm -q amazon-ssm-agent >/dev/null 2>&1; then
+  retry dnf install -y \
+    "https://s3.${aws_region}.amazonaws.com/amazon-ssm-${aws_region}/latest/linux_amd64/amazon-ssm-agent.rpm"
+fi
+
+systemctl enable --now amazon-ssm-agent
+systemctl is-active --quiet amazon-ssm-agent
+
+echo "Bootstrap completed successfully."

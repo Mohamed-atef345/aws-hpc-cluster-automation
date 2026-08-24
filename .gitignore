@@ -13,6 +13,7 @@
 *.tfstate.*
 *.tfstate.backup
 *.tfstate.lock.info
+ARCHITECTURE.md
 
 # Execution plan files
 *.tfplan
@@ -62,7 +63,6 @@ terraform.rc
 .env
 .env.*
 !.env.example
-ARCHITECTURE.md
 
 # Private keys and certificates
 *.pem
@@ -113,5 +113,4 @@ __pycache__/
 .venv/
 venv/
 *.retry
-
 

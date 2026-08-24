@@ -1,9 +1,33 @@
+module "secrets" {
+  source = "../modules/secrets"
+
+  name_prefix = var.name_prefix
+  common_tags = local.common_tags
+}
+
 module "iam" {
   source = "../modules/iam"
 
-  name_prefix            = var.name_prefix
-  freeipa_secret_arns    = local.freeipa_secret_arns
-  controller_secret_arns = local.controller_secret_arns
+  name_prefix = var.name_prefix
+  secret_arns_by_role = {
+    freeipa = [module.secrets.secret_arns.freeipa_credentials]
+    controller = [
+      module.secrets.secret_arns.munge_key,
+      module.secrets.secret_arns.slurmdbd_credentials,
+    ]
+    login   = [module.secrets.secret_arns.munge_key]
+    compute = [module.secrets.secret_arns.munge_key]
+  }
+}
+
+moved {
+  from = module.iam.aws_iam_role_policy.freeipa_secrets[0]
+  to   = module.iam.aws_iam_role_policy.secrets["freeipa"]
+}
+
+moved {
+  from = module.iam.aws_iam_role_policy.controller_secrets[0]
+  to   = module.iam.aws_iam_role_policy.secrets["controller"]
 }
 
 data "aws_iam_policy_document" "github_assume_role" {
@@ -55,6 +79,8 @@ data "aws_iam_policy_document" "terraform_state" {
       values = [
         dirname(var.state_key),
         "${dirname(var.state_key)}/*",
+        dirname(var.identity_state_key),
+        "${dirname(var.identity_state_key)}/*",
       ]
     }
   }
@@ -81,6 +107,14 @@ data "aws_iam_policy_document" "terraform_state" {
       "arn:${data.aws_partition.current.partition}:s3:::${var.state_bucket_name}/${var.state_key}.tflock",
     ]
   }
+
+  statement {
+    sid     = "ReadIdentityState"
+    actions = ["s3:GetObject"]
+    resources = [
+      "arn:${data.aws_partition.current.partition}:s3:::${var.state_bucket_name}/${var.identity_state_key}",
+    ]
+  }
 }
 
 resource "aws_iam_role_policy" "terraform_state" {
@@ -93,15 +127,8 @@ data "aws_iam_policy_document" "terraform_infrastructure" {
   statement {
     sid = "ReadProjectInfrastructure"
     actions = [
-      "cloudwatch:DescribeAlarms",
-      "cloudwatch:GetDashboard",
-      "cloudwatch:ListDashboards",
       "ec2:Describe*",
       "elasticfilesystem:Describe*",
-      "logs:Describe*",
-      "logs:ListTagsForResource",
-      "secretsmanager:DescribeSecret",
-      "secretsmanager:ListSecrets",
     ]
     resources = ["*"]
   }
@@ -157,43 +184,13 @@ data "aws_iam_policy_document" "terraform_infrastructure" {
     sid = "ManageProjectEFS"
     actions = [
       "elasticfilesystem:CreateFileSystem",
+      "elasticfilesystem:CreateAccessPoint",
       "elasticfilesystem:CreateMountTarget",
+      "elasticfilesystem:DeleteAccessPoint",
       "elasticfilesystem:DeleteFileSystem",
       "elasticfilesystem:DeleteMountTarget",
       "elasticfilesystem:TagResource",
       "elasticfilesystem:UntagResource",
-    ]
-    resources = ["*"]
-  }
-
-  statement {
-    sid = "ManageProjectSecrets"
-    actions = [
-      "secretsmanager:CreateSecret",
-      "secretsmanager:DeleteSecret",
-      "secretsmanager:RestoreSecret",
-      "secretsmanager:TagResource",
-      "secretsmanager:UntagResource",
-      "secretsmanager:UpdateSecret",
-    ]
-    resources = [
-      "arn:${data.aws_partition.current.partition}:secretsmanager:${var.aws_region}:${data.aws_caller_identity.current.account_id}:secret:${var.name_prefix}/*",
-    ]
-  }
-
-  statement {
-    sid = "ManageProjectObservability"
-    actions = [
-      "cloudwatch:DeleteAlarms",
-      "cloudwatch:DeleteDashboards",
-      "cloudwatch:PutDashboard",
-      "cloudwatch:PutMetricAlarm",
-      "logs:CreateLogGroup",
-      "logs:DeleteLogGroup",
-      "logs:DeleteRetentionPolicy",
-      "logs:PutRetentionPolicy",
-      "logs:TagResource",
-      "logs:UntagResource",
     ]
     resources = ["*"]
   }

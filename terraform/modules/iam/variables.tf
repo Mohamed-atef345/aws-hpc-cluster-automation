@@ -3,14 +3,16 @@ variable "name_prefix" {
   type        = string
 }
 
-variable "freeipa_secret_arns" {
-  description = "Secrets Manager ARNs readable by the FreeIPA instance"
-  type        = list(string)
-  default     = []
-}
+variable "secret_arns_by_role" {
+  description = "Secrets Manager ARNs readable by each EC2 node role"
+  type        = map(list(string))
+  default     = {}
 
-variable "controller_secret_arns" {
-  description = "Secrets Manager ARNs readable by the Slurm controller"
-  type        = list(string)
-  default     = []
+  validation {
+    condition = alltrue([
+      for role in keys(var.secret_arns_by_role) :
+      contains(["freeipa", "controller", "login", "compute"], role)
+    ])
+    error_message = "secret_arns_by_role keys must be freeipa, controller, login, or compute."
+  }
 }

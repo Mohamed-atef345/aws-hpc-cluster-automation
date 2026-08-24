@@ -1,24 +1,18 @@
-aws_region       = "us-east-1"
-availability_zone = "us-east-1a"
+aws_region   = "us-east-1"
+project_name = "HPCSlurmFreeIPA"
 
-project_name = "hpc-slurm-freeipa"
-environment  = "dev"
-owner        = "mohamed-atef"
+vpc_cidr            = "10.20.0.0/16"
+public_subnet_cidr   = "10.20.1.0/24"
+private_subnet_cidr  = "10.20.10.0/24"
+availability_zone    = "us-east-1a"
 
-vpc_cidr               = "10.20.0.0/16"
-public_subnet_cidr     = "10.20.0.0/24"
-private_subnet_cidr = "10.20.10.0/24"
+ami_id = "ami-07f1ef003bc5de2b1"
 
-# Replace this with a trusted Rocky Linux 9 AMI from your selected region.
-ami_id = "ami-replace-me"
-
-freeipa_instance_type   = "t3.medium"
+freeipa_instance_type    = "t3.medium"
 controller_instance_type = "t3.medium"
-login_instance_type     = "t3.small"
-compute_instance_type   = "t3.small"
-compute_count           = 2
+login_instance_type      = "t3.small"
+compute_instance_type    = "t3.small"
 
-root_volume_type = "gp3"
-root_volume_size = 20
-
-freeipa_domain = "hpc.test"
+root_volume_size            = 20
+compute_scratch_volume_size = 20
+scratch_volume_type         = "gp3"
