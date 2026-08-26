@@ -49,3 +49,90 @@
           - scratch_mount_stat.stat.gr_name == 'root'
           - scratch_mount_stat.stat.mode == '1777'
         fail_msg: "{{ scratch_mount_path }} must be owned by root:root with mode 1777."
+
+- name: Verify cross-node MUNGE authentication
+  hosts: controller
+  tasks:
+    - name: Generate MUNGE credential on controller
+      ansible.builtin.command: munge -n
+      register: controller_munge_token
+      changed_when: false
+
+    - name: Validate controller credential on compute and login nodes
+      delegate_to: "{{ item }}"
+      ansible.builtin.shell: |
+        printf '%s' {{ controller_munge_token.stdout | quote }} | unmunge
+      loop: "{{ groups['slurm_nodes'] }}"
+      changed_when: false
+
+- name: Validate the Slurm accounting database
+  hosts: controller
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Load MariaDB role defaults for validation
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/../roles/mariadb/defaults/main.yml"
+        name: mariadb_role_defaults
+
+    - name: Retrieve the Slurm database secret for validation
+      ansible.builtin.command:
+        argv:
+          - aws
+          - secretsmanager
+          - get-secret-value
+          - --secret-id
+          - "{{ slurm_database_secret_name }}"
+          - --region
+          - "{{ aws_region }}"
+          - --query
+          - SecretString
+          - --output
+          - text
+          - --no-cli-pager
+      register: mariadb_validation_secret_result
+      changed_when: false
+      no_log: true
+
+    - name: Parse the Slurm database credentials for validation
+      ansible.builtin.set_fact:
+        mariadb_validation_database: >-
+          {{
+            (mariadb_validation_secret_result.stdout | from_json).database_name
+          }}
+        mariadb_validation_user: >-
+          {{ (mariadb_validation_secret_result.stdout | from_json).username }}
+        mariadb_validation_password: >-
+          {{ (mariadb_validation_secret_result.stdout | from_json).password }}
+      no_log: true
+
+    - name: Verify the Slurm database credentials and database access
+      ansible.mysql.mysql_query:
+        login_user: "{{ mariadb_validation_user }}"
+        login_password: "{{ mariadb_validation_password }}"
+        login_unix_socket: >-
+          {{ mariadb_socket | default(mariadb_role_defaults.mariadb_socket) }}
+        login_db: "{{ mariadb_validation_database }}"
+        query: SELECT 1
+      changed_when: false
+      no_log: true
+
+    - name: Read the effective MariaDB bind address
+      ansible.mysql.mysql_query:
+        login_user: root
+        login_unix_socket: >-
+          {{ mariadb_socket | default(mariadb_role_defaults.mariadb_socket) }}
+        query: SELECT @@bind_address AS bind_address
+      register: mariadb_bind_address_result
+      changed_when: false
+
+    - name: Verify MariaDB is restricted to loopback
+      ansible.builtin.assert:
+        that:
+          - >-
+            mariadb_bind_address_result.query_result[0][0].bind_address ==
+            (mariadb_bind_address |
+            default(mariadb_role_defaults.mariadb_bind_address))
+        fail_msg: >-
+          MariaDB must bind to the configured loopback address, not a
+          cluster-facing address.

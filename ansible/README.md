@@ -15,9 +15,14 @@ Implemented and syntax-valid:
 - FreeIPA users, groups, and centralized sudo policy
 - EFS clients for shared `/home` and `/shared` storage
 - Identity-safe compute scratch storage mounted at `/scratch`
+- Shared MUNGE authentication for all Slurm nodes
+- Controller-local MariaDB storage for Slurm accounting
 
 The roles pass local syntax validation. Runtime validation against the deployed
 AWS environment is still pending.
+
+SlurmDBD is the next role in the accounting path, followed by the controller,
+login, and compute Slurm roles.
 
 ## Inventory and connection
 
@@ -182,11 +187,31 @@ ansible-playbook \
 Run the same command twice. The second run should report `changed=0` for both
 compute nodes.
 
-### Storage validation
+### `munge`
 
-`playbooks/validate.yml` performs read-only scratch checks. It confirms that
-`/scratch` is actively mounted as XFS, has a persistent UUID-based fstab entry,
-and is owned by `root:root` with mode `1777`:
+- Installs MUNGE on the controller, login, and compute nodes.
+- Retrieves the shared key directly from AWS Secrets Manager through each
+  node's instance role.
+- Installs the key atomically with `munge:munge` ownership and mode `0600`.
+- Restarts MUNGE only when the key changes and tests local credential handling.
+
+### `mariadb`
+
+- Installs MariaDB on the controller and restricts it to loopback connections.
+- Applies Slurm-oriented InnoDB settings through a dedicated configuration
+  file.
+- Retrieves the database name, user, and password through the controller's
+  instance role without logging them.
+- Creates the case-insensitive accounting database and a local user whose
+  privileges are limited to that database.
+- Tests the same database connection that SlurmDBD will use.
+- Leaves TCP port `3306` private to the controller; SlurmDBD will expose its
+  separate accounting interface on port `6819`.
+
+### Validation
+
+`playbooks/validate.yml` performs read-only checks for scratch storage,
+cross-node MUNGE authentication, and MariaDB accounting-database access:
 
 ```bash
 ansible-playbook \
@@ -194,14 +219,34 @@ ansible-playbook \
   playbooks/validate.yml
 ```
 
-## Secrets prerequisite
+## Secrets prerequisites
 
-Terraform creates the secret container but does not place values in it. Before
-running the playbook, populate `HPCSlurmFreeIPA/freeipa/credentials` with:
+Terraform creates the secret containers but does not place values in them.
+Before running the playbook, populate each container with its matching JSON.
+
+`HPCSlurmFreeIPA/freeipa/credentials`:
 
 ```json
 {
   "admin_password": "REPLACE_ME",
   "directory_manager_password": "REPLACE_ME"
+}
+```
+
+`HPCSlurmFreeIPA/slurm/munge`:
+
+```json
+{
+  "munge_key_base64": "REPLACE_ME"
+}
+```
+
+`HPCSlurmFreeIPA/slurm/database`:
+
+```json
+{
+  "database_name": "slurm_acct_db",
+  "username": "slurm",
+  "password": "REPLACE_ME"
 }
 ```

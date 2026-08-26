@@ -1,0 +1,77 @@
+---
+- name: Install munge prerequisite packages
+  ansible.builtin.dnf:
+    name: "{{ munge_prerequisite_packages }}"
+    state: present
+
+- name: Install munge packages
+  ansible.builtin.dnf:
+    name: "{{ munge_packages }}"
+    state: present
+
+- name: Ensure that /etc/munge directory exists
+  ansible.builtin.file:
+    path: "{{ munge_config_directory }}"
+    state: directory
+    mode: "0700"
+    owner: munge
+    group: munge
+
+- name: Retrieve and install the shared MUNGE key
+  ansible.builtin.shell: |
+    set -euo pipefail
+
+    key_tmp="$(mktemp {{ munge_config_directory | quote }}/.munge.key.XXXXXX)"
+    trap 'rm -f "$key_tmp"' EXIT
+
+    secret_json="$(
+      aws secretsmanager get-secret-value \
+        --secret-id {{ munge_secret_name | quote }} \
+        --region {{ aws_region | quote }} \
+        --query SecretString \
+        --output text \
+        --no-cli-pager
+    )"
+
+    munge_key_base64="$(
+      jq -er '.munge_key_base64 | select(type == "string" and length > 0)' \
+        <<< "$secret_json"
+    )"
+    printf '%s' "$munge_key_base64" | base64 --decode > "$key_tmp"
+    test -s "$key_tmp"
+    chown munge:munge "$key_tmp"
+    chmod 0600 "$key_tmp"
+
+    if test -f {{ munge_key_path | quote }} && cmp --silent "$key_tmp" {{ munge_key_path | quote }}; then
+      exit 0
+    fi
+
+    mv "$key_tmp" {{ munge_key_path | quote }}
+    echo changed
+  args:
+    executable: /bin/bash
+  register: munge_key_install
+  changed_when: "'changed' in munge_key_install.stdout_lines"
+  no_log: true
+  notify: Restart munge
+
+- name: Enable and start MUNGE
+  ansible.builtin.systemd_service:
+    name: "{{ munge_service }}"
+    state: started
+    enabled: true
+
+- name: Flush handlers to restart MUNGE if key was updated
+  ansible.builtin.meta: flush_handlers
+
+- name: Test MUNGE credential generation and decoding locally
+  ansible.builtin.shell: |
+    set -euo pipefail
+    munge -n | unmunge
+  args:
+    executable: /bin/bash
+  register: munge_local_test
+  changed_when: false
+  failed_when: >-
+    munge_local_test.rc != 0 or
+    'STATUS:           Success (0)' not in munge_local_test.stdout

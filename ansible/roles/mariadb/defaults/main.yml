@@ -1,0 +1,18 @@
+---
+mariadb_packages:
+  - mariadb-server
+  - python3-PyMySQL
+
+mariadb_service: mariadb
+mariadb_config_file: /etc/my.cnf.d/slurm-accounting.cnf
+mariadb_socket: /var/lib/mysql/mysql.sock
+mariadb_bind_address: 127.0.0.1
+mariadb_port: 3306
+
+mariadb_character_set: utf8mb4
+mariadb_collation: utf8mb4_general_ci
+mariadb_innodb_buffer_pool_size: 512M
+mariadb_innodb_log_file_size: 128M
+mariadb_innodb_lock_wait_timeout: 900
+mariadb_max_allowed_packet: 16M
+mariadb_innodb_default_row_format: dynamic

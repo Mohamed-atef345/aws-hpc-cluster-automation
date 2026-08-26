@@ -1,0 +1,11 @@
+---
+munge_prerequisite_packages:
+  - epel-release
+
+munge_packages:
+  - munge
+  - munge-libs
+
+munge_service: munge
+munge_config_directory: /etc/munge
+munge_key_path: "{{ munge_config_directory }}/munge.key"

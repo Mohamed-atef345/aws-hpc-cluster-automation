@@ -7,8 +7,9 @@ deployment through AWS OIDC.
 
 > **Current milestone:** Terraform infrastructure and the Ansible base,
 > FreeIPA server, client enrollment, identity, EFS client, and compute scratch
-> roles are implemented and pass syntax validation. AWS runtime validation is
-> still pending. MUNGE is the next Ansible development phase.
+> roles are implemented and pass syntax validation. MUNGE and the controller's
+> MariaDB accounting storage are also implemented. AWS runtime validation is
+> still pending; SlurmDBD is the next Ansible development phase.
 
 ## Overview
 
@@ -45,7 +46,7 @@ Status values: **Complete**, **In progress**, **Planned**, and **Deferred**.
 | Ansible base         | In progress | Dynamic inventory and common role implemented; run against AWS     | Syntax check passed             |
 | FreeIPA              | In progress | Server, clients, identities, and sudo policy coded; run against AWS | Syntax check passed             |
 | Shared storage       | In progress | EFS and scratch roles implemented; run against AWS                 | Syntax check passed             |
-| Slurm and accounting | Planned     | MUNGE, MariaDB, SlurmDBD, controller, login, and compute working   | Add Slurm evidence              |
+| Slurm and accounting | In progress | MUNGE, MariaDB, SlurmDBD, controller, login, and compute working   | MUNGE and MariaDB syntax passed |
 | End-to-end demo      | Planned     | FreeIPA user submits and tracks a multi-node job                   | Add job output                  |
 | GitHub Actions       | Planned     | CI, reviewed deployment, validation, and teardown workflows        | Add workflow link               |
 | CloudWatch           | Deferred    | Not part of the current scope                                      | —                               |
@@ -380,8 +381,8 @@ ansible-playbook \
   playbooks/validate.yml
 ```
 
-Populate the FreeIPA credentials secret before running the playbook. Detailed
-Ansible behavior and identity operations are documented in
+Populate the FreeIPA, MUNGE, and Slurm database secrets before running the
+playbook. Detailed Ansible behavior and secret schemas are documented in
 [`ansible/README.md`](ansible/README.md).
 
 ## Ansible implementation status
@@ -437,9 +438,16 @@ Implemented behavior:
 8. Compute-local EBS scratch volumes matched by EBS/NVMe identity, formatted as
    XFS only when blank, and mounted persistently by UUID at `/scratch` with
    mode `1777`.
+9. Shared MUNGE authentication installed on all Slurm nodes with the key
+   retrieved locally from Secrets Manager, atomic key replacement, and local
+   and cross-node credential validation.
+10. Controller-local MariaDB configured for Slurm accounting with loopback-only
+    access, Slurm-oriented InnoDB settings, secret-backed credentials, and a
+    database-scoped application user.
 
-The MUNGE, database, and Slurm roles remain the next implementation stages.
-EFS and scratch runtime validation still requires a deployed AWS environment.
+SlurmDBD, Slurm controller, login, and compute roles remain to be implemented.
+All implemented Ansible roles still require runtime and idempotency validation
+against the deployed AWS environment.
 
 When each role is completed, update the project-status table and add its
 validation result to the next section.
@@ -460,7 +468,8 @@ Replace each pending result with sanitized evidence when that milestone passes.
 | Central identity     | Same UID/GID on login and compute          | Pending         | Add `id` output       |
 | EFS mounts           | `/home` and `/shared` mounted              | Pending runtime | Add `findmnt` output  |
 | Compute scratch      | `/scratch` mounted on both compute nodes   | Pending runtime | Add `findmnt` output  |
-| MUNGE                | Credential validates across nodes          | Pending         | Add MUNGE output      |
+| MUNGE                | Credential validates across nodes          | Pending runtime | Add MUNGE output      |
+| MariaDB              | Slurm user accesses accounting database    | Pending runtime | Add validation output |
 | Slurm nodes          | Both compute nodes are `IDLE`              | Pending         | Add `sinfo` output    |
 | Batch job            | FreeIPA user job completes                 | Pending         | Add `sbatch` output   |
 | Multi-node execution | `srun hostname` reaches both compute nodes | Pending         | Add job output        |

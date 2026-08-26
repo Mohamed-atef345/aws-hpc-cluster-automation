@@ -1,0 +1,96 @@
+---
+- name: Install MariaDB and its Ansible Python driver
+  ansible.builtin.dnf:
+    name: "{{ mariadb_packages }}"
+    state: present
+
+- name: Configure MariaDB for Slurm accounting
+  ansible.builtin.template:
+    src: slurm-accounting.cnf.j2
+    dest: "{{ mariadb_config_file }}"
+    owner: root
+    group: root
+    mode: "0644"
+  notify: Restart MariaDB
+
+- name: Enable and start MariaDB
+  ansible.builtin.systemd_service:
+    name: "{{ mariadb_service }}"
+    enabled: true
+    state: started
+
+- name: Apply MariaDB configuration changes before provisioning
+  ansible.builtin.meta: flush_handlers
+
+- name: Retrieve the Slurm database secret
+  ansible.builtin.command:
+    argv:
+      - aws
+      - secretsmanager
+      - get-secret-value
+      - --secret-id
+      - "{{ slurm_database_secret_name }}"
+      - --region
+      - "{{ aws_region }}"
+      - --query
+      - SecretString
+      - --output
+      - text
+      - --no-cli-pager
+  register: mariadb_secret_result
+  changed_when: false
+  no_log: true
+
+- name: Parse the Slurm database credentials
+  ansible.builtin.set_fact:
+    mariadb_database_name: >-
+      {{ (mariadb_secret_result.stdout | from_json).database_name | default('') }}
+    mariadb_database_user: >-
+      {{ (mariadb_secret_result.stdout | from_json).username | default('') }}
+    mariadb_database_password: >-
+      {{ (mariadb_secret_result.stdout | from_json).password | default('') }}
+  no_log: true
+
+- name: Validate the required Slurm database credentials
+  ansible.builtin.assert:
+    that:
+      - mariadb_database_name | length > 0
+      - "'/' not in mariadb_database_name"
+      - mariadb_database_user | length > 0
+      - mariadb_database_password | length > 0
+    fail_msg: >-
+      The Slurm database secret must contain non-empty database_name, username,
+      and password values, and database_name must not contain a slash.
+  no_log: true
+
+- name: Create the Slurm accounting database
+  ansible.mysql.mysql_db:
+    login_user: root
+    login_unix_socket: "{{ mariadb_socket }}"
+    name: "{{ mariadb_database_name }}"
+    encoding: "{{ mariadb_character_set }}"
+    collation: "{{ mariadb_collation }}"
+    state: present
+
+- name: Create the local Slurm database user
+  ansible.mysql.mysql_user:
+    login_user: root
+    login_unix_socket: "{{ mariadb_socket }}"
+    name: "{{ mariadb_database_user }}"
+    host: localhost
+    password: "{{ mariadb_database_password }}"
+    priv: "{{ mariadb_database_name }}.*:ALL"
+    append_privs: false
+    update_password: always
+    state: present
+  no_log: true
+
+- name: Verify the Slurm database credentials can use the accounting database
+  ansible.mysql.mysql_query:
+    login_user: "{{ mariadb_database_user }}"
+    login_password: "{{ mariadb_database_password }}"
+    login_unix_socket: "{{ mariadb_socket }}"
+    login_db: "{{ mariadb_database_name }}"
+    query: SELECT 1
+  changed_when: false
+  no_log: true

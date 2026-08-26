@@ -1,0 +1,12 @@
+# Ansible managed: Slurm accounting database settings
+[mysqld]
+bind-address = {{ mariadb_bind_address }}
+port = {{ mariadb_port }}
+default-storage-engine = InnoDB
+character-set-server = {{ mariadb_character_set }}
+collation-server = {{ mariadb_collation }}
+innodb_buffer_pool_size = {{ mariadb_innodb_buffer_pool_size }}
+innodb_log_file_size = {{ mariadb_innodb_log_file_size }}
+innodb_lock_wait_timeout = {{ mariadb_innodb_lock_wait_timeout }}
+innodb_default_row_format = {{ mariadb_innodb_default_row_format }}
+max_allowed_packet = {{ mariadb_max_allowed_packet }}
