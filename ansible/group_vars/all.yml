@@ -20,9 +20,11 @@ slurm_database_secret_name: HPCSlurmFreeIPA/slurm/database
 
 home_mount_path: /home
 shared_mount_path: /shared
-scratch_mount_path: /scratch
 
 slurmctld_port: 6817
 slurmd_port: 6818
 slurmdbd_port: 6819
 srun_port_range: 60001-60010
+
+hpc_user_group: hpc_users
+hpc_admin_group: hpc_admins

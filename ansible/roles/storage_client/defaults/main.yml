@@ -1,0 +1,7 @@
+---
+storage_client_packages:
+  - efs-utils
+
+efs_file_system_id: ""
+efs_home_access_point_id: ""
+efs_shared_access_point_id: ""

@@ -1,3 +1,4 @@
+---
 - name: Confirm that the instance role is FreeIPA
   ansible.builtin.assert:
     that:
@@ -6,124 +7,149 @@
       - ec2_tags['Role'] == 'freeipa'
     fail_msg: "The EC2 instance is not tagged with Role=freeipa."
 
-- name: Obtain Kerberos administrator ticket
-  ansible.builtin.shell: |
-    set -euo pipefail
+- name: Create an isolated directory for the Kerberos credential cache
+  ansible.builtin.tempfile:
+    state: directory
+    prefix: ansible-freeipa-identity-
+  register: freeipa_identity_cache_directory
 
-    secret_json="$(
-      aws secretsmanager get-secret-value \
-        --secret-id {{ freeipa_credentials_secret_name | quote }} \
-        --region {{ aws_region | quote }} \
-        --query SecretString \
-        --output text \
-        --no-cli-pager
-    )"
+- name: Manage FreeIPA identities with an isolated administrator ticket
+  block:
+    - name: Obtain Kerberos administrator ticket
+      ansible.builtin.shell: |
+        set -euo pipefail
 
-    admin_password="$(jq -er '.admin_password' <<< "$secret_json")"
+        secret_json="$(
+          aws secretsmanager get-secret-value \
+            --secret-id {{ freeipa_credentials_secret_name | quote }} \
+            --region {{ aws_region | quote }} \
+            --query SecretString \
+            --output text \
+            --no-cli-pager
+        )"
 
-    printf '%s\n' "$admin_password" | kinit admin
+        admin_password="$(jq -er '.admin_password' <<< "$secret_json")"
+        printf '%s\n' "$admin_password" | kinit admin
+        unset secret_json admin_password
+      args:
+        executable: /bin/bash
+      no_log: true
+      changed_when: false
 
-    unset secret_json admin_password
+    - name: Check if the user groups already exist in FreeIPA
+      ansible.builtin.command:
+        argv:
+          - ipa
+          - group-show
+          - "{{ item }}"
+      register: ipa_group_check
+      failed_when: false
+      changed_when: false
+      loop: "{{ hpc_user_groups }}"
 
-  args:
-    executable: /bin/bash
-  no_log: true
-  changed_when: false
+    - name: Create missing user groups
+      ansible.builtin.command:
+        argv:
+          - ipa
+          - group-add
+          - "{{ item.item }}"
+      loop: "{{ ipa_group_check.results }}"
+      loop_control:
+        label: "{{ item.item }}"
+      when: item.rc != 0
 
-- name: Check if the user groups already exist in FreeIPA
-  ansible.builtin.command:
-    argv:
-      - ipa
-      - group-show
-      - "{{ item }}"
-  register: ipa_group_check
-  failed_when: false
-  changed_when: false
-  loop: "{{ hpc_user_groups }}"
+    - name: Check if the user already exists in FreeIPA
+      ansible.builtin.command:
+        argv:
+          - ipa
+          - user-show
+          - "{{ item.username }}"
+      register: ipa_user_check
+      failed_when: false
+      changed_when: false
+      loop: "{{ hpc_users_list }}"
 
-- name: Create missing user groups
-  ansible.builtin.command:
-    argv:
-      - ipa
-      - group-add
-      - "{{ item.item }}"
-  loop: "{{ ipa_group_check.results }}"
-  loop_control:
-    label: "{{ item.item }}"
-  when: item.rc != 0
+    - name: Create missing normal and admin users
+      ansible.builtin.command:
+        argv:
+          - ipa
+          - user-add
+          - "{{ item.item.username }}"
+          - "--first={{ item.item.first_name }}"
+          - "--last={{ item.item.last_name }}"
+          - "--homedir={{ item.item.homedir }}"
+          - "--shell={{ item.item.shell }}"
+      loop: "{{ ipa_user_check.results }}"
+      loop_control:
+        label: "{{ item.item.username }}"
+      when: item.rc != 0
 
-- name: Check if the user already exists in FreeIPA
-  ansible.builtin.command: ipa user-show {{ item.username }}
-  register: ipa_user_check
-  failed_when: false
-  changed_when: false
-  loop: "{{ hpc_users_list }}"
+    - name: Add users to their assigned FreeIPA groups
+      ansible.builtin.command:
+        argv:
+          - ipa
+          - group-add-member
+          - "{{ item.1 }}"
+          - "--users={{ item.0.username }}"
+      loop: "{{ hpc_users_list | subelements('groups') }}"
+      changed_when: true
 
-- name: Create missing normal and admin users
-  ansible.builtin.command:
-    argv:
-      - ipa
-      - user-add
-      - "{{ item.item.username }}"
-      - "--first={{ item.item.first_name }}"
-      - "--last={{ item.item.last_name }}"
-      - "--homedir={{ item.item.homedir }}"
-      - "--shell={{ item.item.shell }}"
-  loop: "{{ ipa_user_check.results }}"
-  loop_control:
-    label: "{{ item.item.username }}"
-  when: item.rc != 0
+    - name: Check if the HPC administrators sudo rule exists
+      ansible.builtin.command:
+        argv:
+          - ipa
+          - sudorule-show
+          - "{{ hpc_admin_sudo_rule }}"
+      register: hpc_admin_sudo_rule_check
+      failed_when: false
+      changed_when: false
 
-- name: Add users to their assigned FreeIPA groups
-  ansible.builtin.command:
-    argv:
-      - ipa
-      - group-add-member
-      - "{{ item.1 }}"
-      - "--users={{ item.0.username }}"
-  loop: "{{ hpc_users_list | subelements('groups') }}"
-  changed_when: true
+    - name: Create the HPC administrators sudo rule
+      ansible.builtin.command:
+        argv:
+          - ipa
+          - sudorule-add
+          - "{{ hpc_admin_sudo_rule }}"
+      when: hpc_admin_sudo_rule_check.rc != 0
 
-- name: Check if the HPC administrators sudo rule exists
-  ansible.builtin.command:
-    argv:
-      - ipa
-      - sudorule-show
-      - "{{ hpc_admin_sudo_rule }}"
-  register: hpc_admin_sudo_rule_check
-  failed_when: false
-  changed_when: false
+    - name: Allow the HPC administrators sudo rule on all hosts and commands
+      ansible.builtin.command:
+        argv:
+          - ipa
+          - sudorule-mod
+          - "{{ hpc_admin_sudo_rule }}"
+          - --hostcat=all
+          - --cmdcat=all
+          - --runasusercat=all
+          - --runasgroupcat=all
+      changed_when: false
 
-- name: Create the HPC administrators sudo rule
-  ansible.builtin.command:
-    argv:
-      - ipa
-      - sudorule-add
-      - "{{ hpc_admin_sudo_rule }}"
-  when: hpc_admin_sudo_rule_check.rc != 0
+    - name: Assign the HPC administrators group to the sudo rule
+      ansible.builtin.command:
+        argv:
+          - ipa
+          - sudorule-add-user
+          - "{{ hpc_admin_sudo_rule }}"
+          - "--groups={{ hpc_admin_group }}"
+      register: hpc_admin_sudo_group_result
+      changed_when: >-
+        'Number of members added 1' in hpc_admin_sudo_group_result.stdout
 
-- name: Allow the HPC administrators sudo rule on all hosts and commands
-  ansible.builtin.command:
-    argv:
-      - ipa
-      - sudorule-mod
-      - "{{ hpc_admin_sudo_rule }}"
-      - --hostcat=all
-      - --cmdcat=all
-      - --runasusercat=all
-      - --runasgroupcat=all
-  changed_when: false
+  always:
+    - name: Destroy the isolated Kerberos administrator ticket
+      ansible.builtin.command:
+        argv:
+          - kdestroy
+          - -q
+          - -c
+          - "FILE:{{ freeipa_identity_cache_directory.path }}/ccache"
+      changed_when: false
+      failed_when: false
 
-- name: Assign the HPC administrators group to the sudo rule
-  ansible.builtin.command:
-    argv:
-      - ipa
-      - sudorule-add-user
-      - "{{ hpc_admin_sudo_rule }}"
-      - "--groups={{ hpc_admin_group }}"
-  register: hpc_admin_sudo_group_result
-  changed_when: "'Number of members added 1' in hpc_admin_sudo_group_result.stdout"
+    - name: Remove the isolated Kerberos credential cache directory
+      ansible.builtin.file:
+        path: "{{ freeipa_identity_cache_directory.path }}"
+        state: absent
 
-- name: Destroy Kerberos administrator ticket
-  ansible.builtin.command: kdestroy
-  changed_when: false
+  environment:
+    KRB5CCNAME: "FILE:{{ freeipa_identity_cache_directory.path }}/ccache"

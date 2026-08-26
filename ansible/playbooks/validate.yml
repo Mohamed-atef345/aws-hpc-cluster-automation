@@ -1,0 +1,51 @@
+---
+- name: Validate compute scratch storage
+  hosts: compute
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Verify scratch is mounted as XFS
+      ansible.builtin.command:
+        argv:
+          - findmnt
+          - --noheadings
+          - --output
+          - FSTYPE
+          - --mountpoint
+          - "{{ scratch_mount_path }}"
+      register: scratch_active_mount
+      changed_when: false
+      failed_when: >-
+        scratch_active_mount.rc != 0 or
+        scratch_active_mount.stdout | trim != 'xfs'
+
+    - name: Verify scratch has a persistent UUID mount definition
+      ansible.builtin.command:
+        argv:
+          - findmnt
+          - --fstab
+          - --noheadings
+          - --output
+          - SOURCE,FSTYPE
+          - --target
+          - "{{ scratch_mount_path }}"
+      register: scratch_persistent_mount
+      changed_when: false
+      failed_when: >-
+        scratch_persistent_mount.rc != 0 or
+        not (scratch_persistent_mount.stdout | trim).startswith('UUID=') or
+        (scratch_persistent_mount.stdout.split() | last) != 'xfs'
+
+    - name: Read scratch mount permissions
+      ansible.builtin.stat:
+        path: "{{ scratch_mount_path }}"
+      register: scratch_mount_stat
+
+    - name: Verify scratch mount permissions
+      ansible.builtin.assert:
+        that:
+          - scratch_mount_stat.stat.isdir
+          - scratch_mount_stat.stat.pw_name == 'root'
+          - scratch_mount_stat.stat.gr_name == 'root'
+          - scratch_mount_stat.stat.mode == '1777'
+        fail_msg: "{{ scratch_mount_path }} must be owned by root:root with mode 1777."

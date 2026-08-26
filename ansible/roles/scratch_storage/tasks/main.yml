@@ -1,0 +1,153 @@
+---
+- name: Select the Terraform-managed scratch EBS attachment
+  ansible.builtin.set_fact:
+    scratch_volume_mappings: >-
+      {{
+        block_device_mappings | default([])
+        | selectattr('device_name', 'equalto', scratch_aws_device_name)
+        | list
+      }}
+
+- name: Verify the scratch EBS attachment identity
+  ansible.builtin.assert:
+    that:
+      - scratch_volume_mappings | length == 1
+      - scratch_volume_mappings[0].ebs.volume_id is defined
+      - scratch_volume_mappings[0].ebs.volume_id is match('^vol-[0-9a-f]+$')
+    fail_msg: >-
+      Expected exactly one {{ scratch_aws_device_name }} EBS attachment with a
+      valid volume ID in the EC2 inventory metadata.
+
+- name: Record the expected scratch EBS serial
+  ansible.builtin.set_fact:
+    scratch_expected_serial: >-
+      {{ scratch_volume_mappings[0].ebs.volume_id | replace('-', '') | lower }}
+
+- name: Install the scratch filesystem tools
+  ansible.builtin.dnf:
+    name: "{{ scratch_storage_packages }}"
+    state: present
+
+- name: Wait for the scratch EBS volume to appear as an NVMe disk
+  ansible.builtin.command:
+    argv:
+      - lsblk
+      - --json
+      - --nodeps
+      - --paths
+      - --output
+      - PATH,SERIAL,TYPE
+  register: scratch_lsblk
+  changed_when: false
+  retries: 10
+  delay: 3
+  until: >-
+    scratch_expected_serial in
+    (scratch_lsblk.stdout | replace('-', '') | lower)
+
+- name: Initialize the matching scratch device list
+  ansible.builtin.set_fact:
+    scratch_device_candidates: []
+
+- name: Match the EBS volume ID to its NVMe device
+  ansible.builtin.set_fact:
+    scratch_device_candidates: "{{ scratch_device_candidates + [item.path] }}"
+  loop: "{{ (scratch_lsblk.stdout | from_json).blockdevices }}"
+  loop_control:
+    label: "{{ item.path }}"
+  when:
+    - item.type == 'disk'
+    - item.serial is defined
+    - item.serial is not none
+    - (item.serial | replace('-', '') | lower) == scratch_expected_serial
+
+- name: Verify exactly one NVMe device matches the scratch volume
+  ansible.builtin.assert:
+    that:
+      - scratch_device_candidates | length == 1
+    fail_msg: >-
+      Expected exactly one NVMe disk with EBS serial
+      {{ scratch_volume_mappings[0].ebs.volume_id }}, but found
+      {{ scratch_device_candidates | length }}.
+
+- name: Record the scratch NVMe device path
+  ansible.builtin.set_fact:
+    scratch_device_path: "{{ scratch_device_candidates[0] }}"
+
+- name: Inspect existing signatures on the scratch disk
+  ansible.builtin.command:
+    argv:
+      - wipefs
+      - --no-act
+      - --json
+      - "{{ scratch_device_path }}"
+  register: scratch_wipefs
+  changed_when: false
+
+- name: Record the scratch disk signature types
+  ansible.builtin.set_fact:
+    scratch_signature_types: >-
+      {{
+        ((scratch_wipefs.stdout | from_json).signatures | default([], true))
+        | map(attribute='type')
+        | unique
+        | list
+      }}
+
+- name: Reject unexpected scratch disk contents
+  ansible.builtin.assert:
+    that:
+      - >-
+        scratch_signature_types | length == 0 or
+        scratch_signature_types == [scratch_filesystem_type]
+    fail_msg: >-
+      Refusing to format {{ scratch_device_path }} because it contains
+      unexpected signatures: {{ scratch_signature_types | join(', ') }}.
+
+- name: Create the scratch XFS filesystem on a blank disk
+  ansible.builtin.command:
+    argv:
+      - mkfs.xfs
+      - "{{ scratch_device_path }}"
+  when: scratch_signature_types | length == 0
+
+- name: Read the scratch filesystem UUID
+  ansible.builtin.command:
+    argv:
+      - blkid
+      - --output
+      - value
+      - --match-tag
+      - UUID
+      - "{{ scratch_device_path }}"
+  register: scratch_blkid_uuid
+  changed_when: false
+  failed_when: >-
+    scratch_blkid_uuid.rc != 0 or
+    scratch_blkid_uuid.stdout | trim | length == 0
+
+- name: Create the scratch mount point
+  ansible.builtin.file:
+    path: "{{ scratch_mount_path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ scratch_mount_mode }}"
+
+- name: Persist and mount the scratch filesystem by UUID
+  ansible.posix.mount:
+    path: "{{ scratch_mount_path }}"
+    src: "UUID={{ scratch_blkid_uuid.stdout | trim }}"
+    fstype: "{{ scratch_filesystem_type }}"
+    opts: "{{ scratch_mount_options }}"
+    dump: "0"
+    passno: "0"
+    state: mounted
+
+- name: Apply permissions to the mounted scratch filesystem
+  ansible.builtin.file:
+    path: "{{ scratch_mount_path }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "{{ scratch_mount_mode }}"

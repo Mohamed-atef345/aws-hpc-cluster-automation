@@ -6,9 +6,9 @@ the cluster services, and GitHub Actions will provide validation and controlled
 deployment through AWS OIDC.
 
 > **Current milestone:** Terraform infrastructure and the Ansible base,
-> FreeIPA server, client enrollment, and identity roles are implemented and pass
-> syntax validation. AWS runtime validation is still pending. Shared storage is
-> the next Ansible development phase.
+> FreeIPA server, client enrollment, identity, EFS client, and compute scratch
+> roles are implemented and pass syntax validation. AWS runtime validation is
+> still pending. MUNGE is the next Ansible development phase.
 
 ## Overview
 
@@ -44,7 +44,7 @@ Status values: **Complete**, **In progress**, **Planned**, and **Deferred**.
 | AWS deployment       | Planned     | Apply infrastructure and confirm five SSM-managed nodes            | Add deployment evidence         |
 | Ansible base         | In progress | Dynamic inventory and common role implemented; run against AWS     | Syntax check passed             |
 | FreeIPA              | In progress | Server, clients, identities, and sudo policy coded; run against AWS | Syntax check passed             |
-| Shared storage       | Planned     | EFS and scratch mounts configured idempotently                     | Add mount evidence              |
+| Shared storage       | In progress | EFS and scratch roles implemented; run against AWS                 | Syntax check passed             |
 | Slurm and accounting | Planned     | MUNGE, MariaDB, SlurmDBD, controller, login, and compute working   | Add Slurm evidence              |
 | End-to-end demo      | Planned     | FreeIPA user submits and tracks a multi-node job                   | Add job output                  |
 | GitHub Actions       | Planned     | CI, reviewed deployment, validation, and teardown workflows        | Add workflow link               |
@@ -355,13 +355,29 @@ ansible-galaxy collection install -r ansible/requirements.yml
 ANSIBLE_TRANSFER_BUCKET="$(
   terraform -chdir=terraform output -raw ansible_transfer_bucket_name
 )"
+EFS_FILE_SYSTEM_ID="$(
+  terraform -chdir=terraform output -raw efs_file_system_id
+)"
+EFS_HOME_ACCESS_POINT_ID="$(
+  terraform -chdir=terraform output -raw efs_home_access_point_id
+)"
+EFS_SHARED_ACCESS_POINT_ID="$(
+  terraform -chdir=terraform output -raw efs_shared_access_point_id
+)"
 
 cd ansible
 ansible-inventory --graph
 ansible-playbook --syntax-check playbooks/site.yml
+ansible-playbook --syntax-check playbooks/validate.yml
 ansible-playbook \
   -e "ansible_aws_ssm_bucket_name=${ANSIBLE_TRANSFER_BUCKET}" \
+  -e "efs_file_system_id=${EFS_FILE_SYSTEM_ID}" \
+  -e "efs_home_access_point_id=${EFS_HOME_ACCESS_POINT_ID}" \
+  -e "efs_shared_access_point_id=${EFS_SHARED_ACCESS_POINT_ID}" \
   playbooks/site.yml
+ansible-playbook \
+  -e "ansible_aws_ssm_bucket_name=${ANSIBLE_TRANSFER_BUCKET}" \
+  playbooks/validate.yml
 ```
 
 Populate the FreeIPA credentials secret before running the playbook. Detailed
@@ -414,10 +430,16 @@ Implemented behavior:
 5. Client DNS configuration, one-time-password enrollment, automatic home
    directory support, host keytab validation, and SSSD domain validation.
 6. FreeIPA `hpc_users` and `hpc_admins` groups, demonstration users, and a
-   centralized full-sudo rule for members of `hpc_admins`.
+   centralized full-sudo rule for members of `hpc_admins`. Identity operations
+   use an isolated Kerberos cache that is removed on success and failure.
+7. Encrypted EFS access points mounted persistently at `/home` and `/shared`,
+   with setgid group collaboration permissions on `/shared`.
+8. Compute-local EBS scratch volumes matched by EBS/NVMe identity, formatted as
+   XFS only when blank, and mounted persistently by UUID at `/scratch` with
+   mode `1777`.
 
-The storage, MUNGE, database, and Slurm roles currently remain the next
-implementation stages.
+The MUNGE, database, and Slurm roles remain the next implementation stages.
+EFS and scratch runtime validation still requires a deployed AWS environment.
 
 When each role is completed, update the project-status table and add its
 validation result to the next section.
@@ -426,23 +448,23 @@ validation result to the next section.
 
 Replace each pending result with sanitized evidence when that milestone passes.
 
-| Test                 | Expected result                            | Current result | Evidence              |
-| -------------------- | ------------------------------------------ | -------------- | --------------------- |
-| Terraform formatting | Both roots pass recursive formatting       | Passed         | Add CI link later     |
-| Terraform validation | Both roots are valid                       | Passed         | Local validation      |
+| Test                 | Expected result                            | Current result  | Evidence              |
+| -------------------- | ------------------------------------------ | --------------- | --------------------- |
+| Terraform formatting | Both roots pass recursive formatting       | Passed          | Add CI link later     |
+| Terraform validation | Both roots are valid                       | Passed          | Local validation      |
 | Infrastructure plan  | Includes the private S3 transfer bucket     | Pending re-plan | Add plan summary      |
-| SSM registration     | Five nodes report `Online`                 | Pending        | Add screenshot/output |
-| Dynamic inventory    | Five hosts grouped by `Role`               | Pending        | Add inventory graph   |
-| FreeIPA health       | IPA services healthy                       | Pending        | Add `ipactl status`   |
-| Kerberos             | Test user receives a ticket                | Pending        | Add `klist` output    |
-| Central identity     | Same UID/GID on login and compute          | Pending        | Add `id` output       |
-| EFS mounts           | `/home` and `/shared` mounted              | Pending        | Add `findmnt` output  |
-| Compute scratch      | `/scratch` mounted on both compute nodes   | Pending        | Add `findmnt` output  |
-| MUNGE                | Credential validates across nodes          | Pending        | Add MUNGE output      |
-| Slurm nodes          | Both compute nodes are `IDLE`              | Pending        | Add `sinfo` output    |
-| Batch job            | FreeIPA user job completes                 | Pending        | Add `sbatch` output   |
-| Multi-node execution | `srun hostname` reaches both compute nodes | Pending        | Add job output        |
-| Accounting           | Completed job appears in `sacct`           | Pending        | Add accounting output |
+| SSM registration     | Five nodes report `Online`                 | Pending         | Add screenshot/output |
+| Dynamic inventory    | Five hosts grouped by `Role`               | Pending         | Add inventory graph   |
+| FreeIPA health       | IPA services healthy                       | Pending         | Add `ipactl status`   |
+| Kerberos             | Test user receives a ticket                | Pending         | Add `klist` output    |
+| Central identity     | Same UID/GID on login and compute          | Pending         | Add `id` output       |
+| EFS mounts           | `/home` and `/shared` mounted              | Pending runtime | Add `findmnt` output  |
+| Compute scratch      | `/scratch` mounted on both compute nodes   | Pending runtime | Add `findmnt` output  |
+| MUNGE                | Credential validates across nodes          | Pending         | Add MUNGE output      |
+| Slurm nodes          | Both compute nodes are `IDLE`              | Pending         | Add `sinfo` output    |
+| Batch job            | FreeIPA user job completes                 | Pending         | Add `sbatch` output   |
+| Multi-node execution | `srun hostname` reaches both compute nodes | Pending         | Add job output        |
+| Accounting           | Completed job appears in `sacct`           | Pending         | Add accounting output |
 
 ### Final demonstration job
 

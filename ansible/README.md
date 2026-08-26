@@ -13,7 +13,11 @@ Implemented and syntax-valid:
 - FreeIPA server with integrated DNS
 - FreeIPA client enrollment
 - FreeIPA users, groups, and centralized sudo policy
+- EFS clients for shared `/home` and `/shared` storage
+- Identity-safe compute scratch storage mounted at `/scratch`
 
+The roles pass local syntax validation. Runtime validation against the deployed
+AWS environment is still pending.
 
 ## Inventory and connection
 
@@ -40,9 +44,21 @@ that value to the connection plugin at runtime:
 ANSIBLE_TRANSFER_BUCKET="$(
   terraform -chdir=../terraform output -raw ansible_transfer_bucket_name
 )"
+EFS_FILE_SYSTEM_ID="$(
+  terraform -chdir=../terraform output -raw efs_file_system_id
+)"
+EFS_HOME_ACCESS_POINT_ID="$(
+  terraform -chdir=../terraform output -raw efs_home_access_point_id
+)"
+EFS_SHARED_ACCESS_POINT_ID="$(
+  terraform -chdir=../terraform output -raw efs_shared_access_point_id
+)"
 
 ansible-playbook \
   -e "ansible_aws_ssm_bucket_name=${ANSIBLE_TRANSFER_BUCKET}" \
+  -e "efs_file_system_id=${EFS_FILE_SYSTEM_ID}" \
+  -e "efs_home_access_point_id=${EFS_HOME_ACCESS_POINT_ID}" \
+  -e "efs_shared_access_point_id=${EFS_SHARED_ACCESS_POINT_ID}" \
   playbooks/site.yml
 ```
 
@@ -61,6 +77,7 @@ ansible-galaxy collection install -r ansible/requirements.yml
 cd ansible
 ansible-inventory --graph
 ansible-playbook --syntax-check playbooks/site.yml
+ansible-playbook --syntax-check playbooks/validate.yml
 ```
 
 An empty-inventory warning during a local syntax check is expected when no AWS
@@ -104,6 +121,10 @@ The role creates these POSIX groups and demonstration users:
 The `hpc-admins-all` FreeIPA sudo rule grants members of `hpc_admins` full sudo
 access on all enrolled hosts. Membership in `hpc_users` does not grant sudo.
 
+Administrator operations use a unique temporary Kerberos credential cache. An
+Ansible `always` block destroys the ticket and removes its cache directory after
+both successful and failed identity-management runs.
+
 The role intentionally creates users without passwords. An administrator must
 set each initial password after deployment:
 
@@ -126,6 +147,52 @@ to replace it during first authentication.
   FreeIPA administrator secret away from client instance roles.
 - Enrolls controller, login, and compute nodes non-interactively.
 - Confirms the host keytab exists and the SSSD domain is online.
+
+### `storage_client`
+
+- Verifies the EFS filesystem and access-point IDs supplied from Terraform.
+- Installs the EFS mount helper.
+- Mounts the encrypted access points persistently at `/home` and `/shared`
+  using TLS.
+- Verifies both active mounts.
+- Configures `/shared` as `root:hpc_users` with mode `2775` so new content
+  inherits the HPC users group.
+
+### `scratch_storage`
+
+- Runs only on compute nodes and selects Terraform's `/dev/sdf` attachment from
+  EC2 inventory metadata.
+- Matches the attachment's EBS volume ID to the exact NVMe serial instead of
+  assuming a guest device name.
+- Creates XFS only when the disk has no existing signatures and refuses disks
+  containing any unexpected filesystem, RAID, or partition signature.
+- Mounts the filesystem persistently by UUID at `/scratch` with `noatime`.
+- Configures `/scratch` as `root:root` with mode `1777`.
+
+The scratch role is tagged for an isolated first run and idempotency check:
+
+```bash
+ansible-playbook \
+  -e "ansible_aws_ssm_bucket_name=${ANSIBLE_TRANSFER_BUCKET}" \
+  playbooks/site.yml \
+  --limit compute \
+  --tags scratch_storage
+```
+
+Run the same command twice. The second run should report `changed=0` for both
+compute nodes.
+
+### Storage validation
+
+`playbooks/validate.yml` performs read-only scratch checks. It confirms that
+`/scratch` is actively mounted as XFS, has a persistent UUID-based fstab entry,
+and is owned by `root:root` with mode `1777`:
+
+```bash
+ansible-playbook \
+  -e "ansible_aws_ssm_bucket_name=${ANSIBLE_TRANSFER_BUCKET}" \
+  playbooks/validate.yml
+```
 
 ## Secrets prerequisite
 

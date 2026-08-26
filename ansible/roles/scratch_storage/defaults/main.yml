@@ -1,0 +1,8 @@
+---
+scratch_storage_packages:
+  - xfsprogs
+
+scratch_aws_device_name: /dev/sdf
+scratch_filesystem_type: xfs
+scratch_mount_options: defaults,noatime
+scratch_mount_mode: "1777"

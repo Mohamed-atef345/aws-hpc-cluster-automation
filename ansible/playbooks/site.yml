@@ -23,7 +23,10 @@
   hosts: compute
   become: true
   roles:
-    - scratch_storage
+    - role: scratch_storage
+      tags:
+        - scratch_storage
+        - storage
 
 - name: Configure MUNGE
   hosts: slurm_nodes

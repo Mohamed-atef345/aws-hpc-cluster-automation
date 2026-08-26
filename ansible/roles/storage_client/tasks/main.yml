@@ -1,0 +1,61 @@
+---
+- name: Check that all required variables are set
+  ansible.builtin.assert:
+    that:
+      - (efs_file_system_id | default('')) is match('^fs-[0-9a-f]+$')
+      - (efs_home_access_point_id | default('')) is match('^fsap-[0-9a-f]+$')
+      - (efs_shared_access_point_id | default('')) is match('^fsap-[0-9a-f]+$')
+    fail_msg: "One or more required variables are not set."
+
+- name: Ensure required packages are installed
+  ansible.builtin.dnf:
+    name: "{{ storage_client_packages }}"
+    state: present
+
+- name: Create EFS mount directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  loop:
+    - "{{ home_mount_path }}"
+    - "{{ shared_mount_path }}"
+
+- name: Ensure EFS home directory is mounted
+  ansible.posix.mount:
+    path: "{{ home_mount_path }}"
+    src: "{{ efs_file_system_id }}:/"
+    fstype: efs
+    opts: "tls,_netdev,accesspoint={{ efs_home_access_point_id }}"
+    state: mounted
+
+- name: Ensure EFS shared directory is mounted
+  ansible.posix.mount:
+    path: "{{ shared_mount_path }}"
+    src: "{{ efs_file_system_id }}:/"
+    fstype: efs
+    opts: "tls,_netdev,accesspoint={{ efs_shared_access_point_id }}"
+    state: mounted
+
+- name: Verify each EFS mount point
+  ansible.builtin.command:
+    argv:
+      - findmnt
+      - --mountpoint
+      - "{{ item }}"
+  loop:
+    - "{{ home_mount_path }}"
+    - "{{ shared_mount_path }}"
+  register: findmnt_result
+  changed_when: false
+  failed_when: findmnt_result.rc != 0
+
+- name: Configure permissions on mounted shared storage
+  ansible.builtin.file:
+    path: "{{ shared_mount_path }}"
+    state: directory
+    owner: root
+    group: "{{ hpc_user_group }}"
+    mode: "2775"

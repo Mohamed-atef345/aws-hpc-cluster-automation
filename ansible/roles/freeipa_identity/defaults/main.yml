@@ -5,7 +5,7 @@ hpc_users_list:
     homedir: "/home/hpcuser"
     shell: "/bin/bash"
     groups:
-      - hpc_users
+      - "{{ hpc_user_group }}"
 
   - username: hpcadmin
     first_name: "HPC"
@@ -13,12 +13,12 @@ hpc_users_list:
     homedir: "/home/hpcadmin"
     shell: "/bin/bash"
     groups:
-      - hpc_users
-      - hpc_admins
+      - "{{ hpc_user_group }}"
+      - "{{ hpc_admin_group }}"
 
-hpc_user_groups: 
-  - hpc_users
-  - hpc_admins
+hpc_user_groups:
+  - "{{ hpc_user_group }}"
+  - "{{ hpc_admin_group }}"
 
 hpc_admin_group: hpc_admins
 hpc_admin_sudo_rule: hpc-admins-all
