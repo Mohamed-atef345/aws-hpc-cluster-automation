@@ -1,0 +1,2 @@
+scratch_mount_path: /scratch
+slurm_daemon_service: slurmd

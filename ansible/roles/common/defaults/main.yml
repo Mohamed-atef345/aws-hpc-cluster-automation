@@ -1,0 +1,12 @@
+common_timezone: Etc/UTC
+common_packages:
+  - chrony
+  - curl
+  - jq
+  - unzip
+  - tar
+  - rsync
+  - bind-utils
+  - nfs-utils
+  - lsof
+  - policycoreutils-python-utils

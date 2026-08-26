@@ -1,0 +1,186 @@
+---
+
+- name: Verify common role completed
+  ansible.builtin.assert:
+    that:
+      - common_role_completed is defined
+      - common_role_completed | bool
+    fail_msg: "The common role has not completed successfully on this host."
+
+- name:  Confirm that the instance role is a valid FreeIPA client
+  ansible.builtin.assert:
+    that:
+      - ec2_tags is defined
+      - ec2_tags['Role'] is defined
+      - ec2_tags['Role'] in ['controller', 'login', 'compute']
+    fail_msg: "The instance Role tag must be one of ['controller', 'login', 'compute'], but got '{{ ec2_tags.Role | default('undefined') }}'."
+
+- name: Test TCP connection to FreeIPA server ports
+  ansible.builtin.wait_for:
+    host: "{{ freeipa_server_ip }}"
+    port: "{{ item }}"
+    state: started
+    timeout: 5
+    msg: "Timeout waiting for TCP port {{ item }} on {{ freeipa_server_ip }}"
+  loop: "{{ freeipa_server_ports }}"
+
+- name: Configure FreeIPA DNS
+  ansible.builtin.copy:
+    dest: /etc/NetworkManager/conf.d/99-freeipa-dns.conf
+    mode: "0644"
+    content: |
+      [main]
+      dns=default
+
+      [global-dns]
+      searches={{ freeipa_domain }}
+
+      [global-dns-domain-*]
+      servers={{ freeipa_server_ip }},{{ vpc_dns_server_ip }}
+  register: freeipa_dns_config
+
+- name: Reload NetworkManager after DNS change
+  ansible.builtin.systemd_service:
+    name: NetworkManager
+    state: reloaded
+  when: freeipa_dns_config.changed
+
+- name: Verify FreeIPA DNS records
+  ansible.builtin.command:
+    argv:
+      - dig
+      - +short
+      - "{{ item.name }}"
+      - "{{ item.type }}"
+  loop:
+    - name: "{{ freeipa_server_fqdn }}"
+      type: A
+      expected: "{{ freeipa_server_ip }}"
+
+    - name: "_ldap._tcp.{{ freeipa_domain }}"
+      type: SRV
+      expected: "{{ freeipa_server_fqdn }}."
+
+    - name: "_kerberos._udp.{{ freeipa_domain }}"
+      type: SRV
+      expected: "{{ freeipa_server_fqdn }}."
+  register: freeipa_dns_lookup
+  changed_when: false
+  failed_when: >-
+    freeipa_dns_lookup.rc != 0 or
+    item.expected not in freeipa_dns_lookup.stdout
+
+- name: Verify public DNS resolution through FreeIPA
+  ansible.builtin.command:
+    argv:
+      - dig
+      - +short
+      - google.com
+      - A
+  register: public_dns_lookup
+  changed_when: false
+  failed_when: >-
+    public_dns_lookup.rc != 0 or
+    public_dns_lookup.stdout | trim | length == 0
+
+- name: insatll client packages
+  ansible.builtin.dnf:
+    name: "{{ freeipa_client_packages }}"
+    state: present
+
+- name: enable and start oddjobd
+  ansible.builtin.systemd_service:
+    name: oddjobd
+    state: started
+    enabled: true
+
+- name: Check if host is already enrolled in FreeIPA
+  ansible.builtin.stat:
+    path: /etc/ipa/default.conf
+  register: freeipa_client_enrolled
+
+- name: Generate one-time enrollment password on FreeIPA server
+  ansible.builtin.shell: |
+    set -euo pipefail
+
+    # 1. Create an isolated credential cache and ensure cleanup on exit/error
+    export KRB5CCNAME="$(mktemp /tmp/krb5cc_enroll_XXXXXX)"
+    trap 'kdestroy -q || true; rm -f "$KRB5CCNAME" 2>/dev/null || true' EXIT
+
+    # 2. Retrieve FreeIPA admin password from Secrets Manager
+    secret_json="$(
+      aws secretsmanager get-secret-value \
+        --secret-id {{ freeipa_credentials_secret_name | quote }} \
+        --region {{ aws_region | quote }} \
+        --query SecretString \
+        --output text \
+        --no-cli-pager
+    )"
+    admin_password="$(jq -er '.admin_password' <<< "$secret_json")"
+
+    # 3. Obtain Kerberos ticket as admin in the isolated ccache
+    printf '%s\n' "$admin_password" | kinit admin
+
+    client_fqdn="{{ ec2_tags['NodeName'] }}.{{ cluster_domain }}"
+    client_ip="{{ private_ip_address }}"
+
+    # 4. Pre-create client host and request random OTP (or refresh OTP if host exists)
+    if ! otp_output="$(ipa host-add "$client_fqdn" --ip-address="$client_ip" --random 2>&1)"; then
+      otp_output="$(ipa host-mod "$client_fqdn" --random 2>&1)"
+    fi
+
+    # 5. Extract OTP from output
+    otp="$(echo "$otp_output" | awk -F': ' '/Random password/ {print $2}' | tr -d ' \t\n\r')"
+
+    if [ -z "$otp" ]; then
+      echo "Failed to generate OTP: $otp_output" >&2
+      exit 1
+    fi
+
+    echo "$otp"
+  args:
+    executable: /bin/bash
+  delegate_to: "{{ freeipa_server_shortname }}"
+  throttle: 1
+  no_log: true
+  register: freeipa_client_otp
+  changed_when: true
+  when: not freeipa_client_enrolled.stat.exists
+
+- name: Enroll client into FreeIPA using OTP
+  ansible.builtin.command:
+    creates: /etc/ipa/default.conf
+    argv:
+      - ipa-client-install
+      - --unattended
+      - --hostname={{ ec2_tags['NodeName'] }}.{{ cluster_domain }}
+      - --domain={{ freeipa_domain }}
+      - --realm={{ freeipa_realm }}
+      - --server={{ freeipa_server_fqdn }}
+      - --password={{ freeipa_client_otp.stdout | trim }}
+      - --mkhomedir
+      - --no-ntp
+      - --enable-dns-updates
+  no_log: true
+  when: not freeipa_client_enrolled.stat.exists
+
+- name: confirm that /etc/krb5.keytab exists and not empty
+  ansible.builtin.stat:
+    path: /etc/krb5.keytab
+  register: keytab_exists
+  failed_when: >-
+    keytab_exists.stat.exists == false or
+    keytab_exists.stat.size == 0
+
+- name: Confirm that cluster.internal is online
+  ansible.builtin.command:
+    argv:
+      - sssctl
+      - domain-status
+      - "{{ freeipa_domain }}"
+  register: sssd_domain_status
+  changed_when: false
+  failed_when: >-
+    sssd_domain_status.rc != 0 or
+    'Not operational' in sssd_domain_status.stdout or
+    'Online status: Online' not in sssd_domain_status.stdout

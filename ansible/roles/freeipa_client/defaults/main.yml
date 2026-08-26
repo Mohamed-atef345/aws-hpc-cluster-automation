@@ -1,0 +1,10 @@
+vpc_dns_server_ip: 10.20.0.2
+freeipa_server_ports:
+  - 443
+  - 389
+  - 88
+freeipa_client_packages:
+  - ipa-client 
+  - sssd-tools 
+  - oddjob
+  - oddjob-mkhomedir

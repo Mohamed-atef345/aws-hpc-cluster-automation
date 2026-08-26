@@ -1,0 +1,28 @@
+plugin: amazon.aws.aws_ec2
+regions:
+  - us-east-1
+
+filters:
+  instance-state-name: [running]
+  tag:ManagedBy: terraform
+  tag:Project: HPCSlurmFreeIPA
+  tag:AnsibleManaged: "true"
+
+hostnames:
+  - tag:NodeName
+
+keyed_groups:
+  - key: ec2_tags.Role
+    prefix: ""
+    separator: ""
+
+groups:
+  freeipa_clients: "ec2_tags.Role in ['controller', 'login', 'compute']"
+  slurm_nodes: "ec2_tags.Role in ['controller', 'login', 'compute']"
+
+compose:
+  ansible_host: instance_id
+  ansible_connection: '"amazon.aws.aws_ssm"'
+  ansible_aws_ssm_region: placement.region
+
+strict: true

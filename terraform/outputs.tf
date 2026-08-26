@@ -30,6 +30,16 @@ output "efs_shared_access_point_id" {
   value = module.storage.shared_access_point_id
 }
 
+output "ansible_transfer_bucket_name" {
+  description = "S3 bucket used by the Ansible SSM connection plugin for module transfer"
+  value       = module.ansible_transfer.bucket_name
+}
+
+output "ansible_transfer_bucket_arn" {
+  description = "ARN of the S3 bucket used by the Ansible SSM connection plugin"
+  value       = module.ansible_transfer.bucket_arn
+}
+
 output "node_instance_ids" {
   value = {
     for name, node in module.ec2_nodes :

@@ -1,0 +1,28 @@
+---
+cluster_domain: cluster.internal
+freeipa_domain: cluster.internal
+freeipa_realm: CLUSTER.INTERNAL
+
+freeipa_server_shortname: ipa01
+freeipa_server_fqdn: ipa01.cluster.internal
+freeipa_server_ip: 10.20.10.10
+
+slurm_cluster_name: hpc-cluster
+slurm_controller_shortname: ctl01
+slurm_controller_fqdn: ctl01.cluster.internal
+
+cluster_private_cidr: 10.20.10.0/24
+aws_region: us-east-1
+
+freeipa_credentials_secret_name: HPCSlurmFreeIPA/freeipa/credentials
+munge_secret_name: HPCSlurmFreeIPA/slurm/munge
+slurm_database_secret_name: HPCSlurmFreeIPA/slurm/database
+
+home_mount_path: /home
+shared_mount_path: /shared
+scratch_mount_path: /scratch
+
+slurmctld_port: 6817
+slurmd_port: 6818
+slurmdbd_port: 6819
+srun_port_range: 60001-60010

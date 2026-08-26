@@ -1,0 +1,17 @@
+---
+
+freeipa_server_packages:
+  - firewalld
+  - ipa-server
+  - ipa-server-dns
+
+freeipa_firewalld_services:
+  - freeipa-4
+  - dns
+
+# The VPC resolver is at the VPC network address plus two.
+freeipa_dns_forwarder: 10.20.0.2
+freeipa_reverse_zone: 10.20.10.in-addr.arpa.
+freeipa_dns_forward_test_name: aws.amazon.com
+
+freeipa_install_marker: /etc/ipa/default.conf

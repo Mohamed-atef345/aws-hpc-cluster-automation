@@ -1,0 +1,169 @@
+---
+
+- name: Verify common role completed
+  ansible.builtin.assert:
+    that:
+      - common_role_completed is defined
+      - common_role_completed | bool
+    fail_msg: "The common role has not completed successfully on this host."
+
+- name: Confirm that the instance role is FreeIPA
+  ansible.builtin.assert:
+    that:
+      - ec2_tags is defined
+      - ec2_tags['Role'] is defined
+      - ec2_tags['Role'] == 'freeipa'
+    fail_msg: "The EC2 instance is not tagged with Role=freeipa."
+
+- name: Confirm FreeIPA FQDN temporarily resolves to its private IP
+  ansible.builtin.command:
+    argv:
+      - getent
+      - ahostsv4
+      - "{{ freeipa_server_fqdn }}"
+  register: freeipa_fqdn_lookup
+  changed_when: false
+  failed_when: >-
+    freeipa_fqdn_lookup.rc != 0 or
+    (freeipa_fqdn_lookup.stdout.split() | first | default('')) != freeipa_server_ip
+
+- name: Confirm the FreeIPA credentials secret has both required values
+  ansible.builtin.shell: |
+    set -euo pipefail
+
+    aws secretsmanager get-secret-value \
+      --secret-id {{ freeipa_credentials_secret_name | quote }} \
+      --region {{ aws_region | quote }} \
+      --query SecretString \
+      --output text \
+      --no-cli-pager \
+    | jq -e '
+        (.admin_password | type == "string" and length > 0) and
+        (.directory_manager_password | type == "string" and length > 0)
+      ' >/dev/null
+  args:
+    executable: /bin/bash
+  changed_when: false
+  no_log: true
+
+- name: Install the FreeIPA server and integrated DNS packages
+  ansible.builtin.dnf:
+    name: "{{ freeipa_server_packages }}"
+    state: present
+
+- name: Enable and start firewalld
+  ansible.builtin.systemd_service:
+    name: firewalld
+    enabled: true
+    state: started
+
+- name: Open the FreeIPA and DNS firewalld services
+  ansible.posix.firewalld:
+    service: "{{ item }}"
+    permanent: true
+    state: enabled
+    immediate: true
+  loop: "{{ freeipa_firewalld_services }}"
+
+- name: Install the FreeIPA server non-interactively
+  ansible.builtin.shell: |
+    set -euo pipefail
+
+    secret_json="$(
+      aws secretsmanager get-secret-value \
+        --secret-id {{ freeipa_credentials_secret_name | quote }} \
+        --region {{ aws_region | quote }} \
+        --query SecretString \
+        --output text \
+        --no-cli-pager
+    )"
+
+    admin_password="$(jq -er '.admin_password' <<< "$secret_json")"
+    directory_manager_password="$(
+      jq -er '.directory_manager_password' <<< "$secret_json"
+    )"
+
+    ipa-server-install \
+      --unattended \
+      --hostname {{ freeipa_server_fqdn | quote }} \
+      --ip-address {{ freeipa_server_ip | quote }} \
+      --domain {{ freeipa_domain | quote }} \
+      --realm {{ freeipa_realm | quote }} \
+      --setup-dns \
+      --forwarder {{ freeipa_dns_forwarder | quote }} \
+      --reverse-zone {{ freeipa_reverse_zone | quote }} \
+      --admin-password "$admin_password" \
+      --ds-password "$directory_manager_password"
+
+    unset secret_json admin_password directory_manager_password
+  args:
+    executable: /bin/bash
+    creates: "{{ freeipa_install_marker }}"
+  no_log: true
+
+- name: Confirm all FreeIPA services are running
+  ansible.builtin.command:
+    argv:
+      - ipactl
+      - status
+  changed_when: false
+
+- name: Query the FreeIPA server A record from integrated DNS
+  ansible.builtin.command:
+    argv:
+      - dig
+      - +short
+      - "@127.0.0.1"
+      - "{{ freeipa_server_fqdn }}"
+      - A
+  register: freeipa_a_record
+  changed_when: false
+  failed_when: >-
+    freeipa_a_record.rc != 0 or
+    freeipa_server_ip not in freeipa_a_record.stdout_lines
+
+- name: Query the LDAP service record from integrated DNS
+  ansible.builtin.command:
+    argv:
+      - dig
+      - +short
+      - "@127.0.0.1"
+      - "_ldap._tcp.{{ freeipa_domain }}"
+      - SRV
+  register: freeipa_ldap_srv_record
+  changed_when: false
+  failed_when: >-
+    freeipa_ldap_srv_record.rc != 0 or
+    freeipa_ldap_srv_record.stdout | trim | length == 0
+
+- name: Query the Kerberos service record from integrated DNS
+  ansible.builtin.command:
+    argv:
+      - dig
+      - +short
+      - "@127.0.0.1"
+      - "_kerberos._udp.{{ freeipa_domain }}"
+      - SRV
+  register: freeipa_kerberos_srv_record
+  changed_when: false
+  failed_when: >-
+    freeipa_kerberos_srv_record.rc != 0 or
+    freeipa_kerberos_srv_record.stdout | trim | length == 0
+
+- name: Verify that integrated DNS forwarding works
+  ansible.builtin.command:
+    argv:
+      - dig
+      - +short
+      - "@127.0.0.1"
+      - "{{ freeipa_dns_forward_test_name }}"
+      - A
+  register: freeipa_forwarded_dns_record
+  changed_when: false
+  failed_when: >-
+    freeipa_forwarded_dns_record.rc != 0 or
+    freeipa_forwarded_dns_record.stdout | trim | length == 0
+
+- name: Record successful completion of the FreeIPA server role
+  ansible.builtin.set_fact:
+    freeipa_server_role_completed: true

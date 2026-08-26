@@ -1,13 +1,14 @@
 # HPCSlurmFreeIPA
 
 An automated AWS HPC lab that combines FreeIPA centralized identity with Slurm
-workload scheduling. Terraform provisions the infrastructure, Ansible will
-configure the cluster services, and GitHub Actions will provide validation and
-controlled deployment through AWS OIDC.
+workload scheduling. Terraform provisions the infrastructure, Ansible configures
+the cluster services, and GitHub Actions will provide validation and controlled
+deployment through AWS OIDC.
 
-> **Current milestone:** Terraform infrastructure is implemented and valid.
-> The persistent identity stack rename must be reviewed and applied before the
-> first cluster deployment. Ansible is the next development phase.
+> **Current milestone:** Terraform infrastructure and the Ansible base,
+> FreeIPA server, client enrollment, and identity roles are implemented and pass
+> syntax validation. AWS runtime validation is still pending. Shared storage is
+> the next Ansible development phase.
 
 ## Overview
 
@@ -33,17 +34,16 @@ Status values: **Complete**, **In progress**, **Planned**, and **Deferred**.
 
 | Phase                | Status      | Completion requirement                                             | Evidence                        |
 | -------------------- | ----------- | ------------------------------------------------------------------ | ------------------------------- |
-| Architecture         | Complete    | Components, trust boundaries, network, and service flow documented | [Architecture](ARCHITECTURE.md) |
 | Terraform backend    | Complete    | Separate S3 state and locking for persistent and disposable roots  | `terraform validate`            |
 | IAM and GitHub OIDC  | In progress | Apply the `HPCSlurmFreeIPA` rename and verify role assumption      | Identity plan reviewed          |
-| Network              | Complete    | VPC, subnets, NAT, IGW, routes, and outputs implemented            | Main plan: 50 resources         |
+| Network              | Complete    | VPC, subnets, NAT, IGW, routes, and outputs implemented            | Terraform validation            |
 | Security groups      | Complete    | FreeIPA, Slurm, EFS, and `srun` rules implemented                  | Terraform validation            |
 | Storage              | Complete    | EFS access points and compute scratch EBS implemented              | Terraform validation            |
 | EC2 nodes            | Complete    | Five private nodes, IMDSv2, encryption, SSM bootstrap              | Terraform validation            |
 | Secrets metadata     | Complete    | Empty secret containers and least-privilege IAM access             | No values in state              |
 | AWS deployment       | Planned     | Apply infrastructure and confirm five SSM-managed nodes            | Add deployment evidence         |
-| Ansible base         | Planned     | Dynamic inventory, hostnames, packages, time, and DNS              | Add play recap                  |
-| FreeIPA              | Planned     | Server installed, clients enrolled, user login validated           | Add identity evidence           |
+| Ansible base         | In progress | Dynamic inventory and common role implemented; run against AWS     | Syntax check passed             |
+| FreeIPA              | In progress | Server, clients, identities, and sudo policy coded; run against AWS | Syntax check passed             |
 | Shared storage       | Planned     | EFS and scratch mounts configured idempotently                     | Add mount evidence              |
 | Slurm and accounting | Planned     | MUNGE, MariaDB, SlurmDBD, controller, login, and compute working   | Add Slurm evidence              |
 | End-to-end demo      | Planned     | FreeIPA user submits and tracks a multi-node job                   | Add job output                  |
@@ -184,8 +184,13 @@ provides the human user's centralized identity.
 │       ├── storage/
 │       ├── ec2_node/
 │       ├── iam/
-│       └── secrets/
-└── ansible/                    # Planned next phase
+│       ├── secrets/
+│       └── ansible_transfer/
+└── ansible/
+    ├── inventory/
+    ├── group_vars/
+    ├── playbooks/
+    └── roles/
 ```
 
 Documentation ownership:
@@ -193,7 +198,7 @@ Documentation ownership:
 - Architecture decisions: `ARCHITECTURE.md`
 - Terraform usage: `terraform/README.md`
 - Persistent identity usage: `terraform/identity/README.md`
-- Future Ansible usage: `ansible/README.md`
+- Ansible usage: `ansible/README.md`
 
 ## Terraform design
 
@@ -202,7 +207,7 @@ Documentation ownership:
 | Root                 | State key                                          | Lifecycle  | Main resources                                  |
 | -------------------- | -------------------------------------------------- | ---------- | ----------------------------------------------- |
 | `terraform/identity` | `slurm-cluster-freeipa/identity/terraform.tfstate` | Persistent | IAM, profiles, OIDC role, secret containers     |
-| `terraform`          | `slurm-cluster-freeipa/dev/terraform.tfstate`      | Disposable | Network, security groups, EFS, EC2, scratch EBS |
+| `terraform`          | `slurm-cluster-freeipa/dev/terraform.tfstate`      | Disposable | Network, EC2, storage, security, transfer bucket |
 
 The backend retains its existing lowercase path to avoid an unnecessary state
 migration. There is no Terraform `environment` variable or `Environment` AWS
@@ -226,8 +231,28 @@ Role           = freeipa | controller | login | compute
 AnsibleManaged = true
 ```
 
-These tags will let the Ansible AWS inventory plugin discover running nodes
-and build groups from `Role` without a static inventory file.
+The Ansible AWS inventory plugin uses these tags to discover running nodes and
+build the `freeipa`, `controller`, `login`, and `compute` groups without a
+static inventory file. It also builds the composite `freeipa_clients` and
+`slurm_nodes` groups.
+
+### Ansible SSM transfer bucket
+
+The disposable Terraform root creates a private, encrypted S3 bucket used by
+the `amazon.aws.aws_ssm` connection plugin to transfer Ansible modules. Public
+access is blocked, abandoned objects expire after one day, and the bucket is
+removed with the disposable infrastructure.
+
+Terraform exports both values required by automation:
+
+```text
+ansible_transfer_bucket_name
+ansible_transfer_bucket_arn
+```
+
+GitHub Actions will read `ansible_transfer_bucket_name` after `terraform apply`
+and pass it to Ansible as `ansible_aws_ssm_bucket_name`. The generated bucket
+name is account- and Region-specific and is not hard-coded in Ansible.
 
 ### Secrets
 
@@ -267,6 +292,9 @@ causes immediate, unrecoverable deletion.
 - Terraform `>= 1.10.0, < 2.0.0`
 - AWS provider `~> 6.61`
 - AWS CLI credentials authorized to manage the identity root
+- Ansible Core and the Python dependencies in `ansible/requirements.txt`
+- The Ansible collections in `ansible/requirements.yml`
+- The Session Manager plugin for the `amazon.aws.aws_ssm` connection
 - Existing encrypted S3 backend bucket
 - Existing GitHub Actions OIDC provider in the AWS account
 - Access to `us-east-1` and sufficient service quotas
@@ -288,8 +316,12 @@ containers. Copy any required secret values before applying.
 
 ### 2. Populate secret values
 
-Use the AWS Secrets Manager console and the documented JSON schemas. Never put
-secret values in Terraform variables, `.tfvars`, GitHub, or committed files.
+Populate values either from the AWS Secrets Manager console or from encrypted
+GitHub Actions environment/repository secrets after Terraform creates the
+containers. A deployment workflow may call `aws secretsmanager put-secret-value`
+and then let the FreeIPA instance retrieve the value through its IAM role.
+Never place plaintext values in Terraform variables, `.tfvars`, workflow YAML,
+logs, or committed files.
 
 ### 3. Apply disposable infrastructure
 
@@ -314,7 +346,29 @@ aws ssm describe-instance-information \
 Do not start application configuration until all expected instances report
 `Online`.
 
-## Ansible implementation plan
+### 5. Run the implemented Ansible roles
+
+```bash
+python3 -m pip install -r ansible/requirements.txt
+ansible-galaxy collection install -r ansible/requirements.yml
+
+ANSIBLE_TRANSFER_BUCKET="$(
+  terraform -chdir=terraform output -raw ansible_transfer_bucket_name
+)"
+
+cd ansible
+ansible-inventory --graph
+ansible-playbook --syntax-check playbooks/site.yml
+ansible-playbook \
+  -e "ansible_aws_ssm_bucket_name=${ANSIBLE_TRANSFER_BUCKET}" \
+  playbooks/site.yml
+```
+
+Populate the FreeIPA credentials secret before running the playbook. Detailed
+Ansible behavior and identity operations are documented in
+[`ansible/README.md`](ansible/README.md).
+
+## Ansible implementation status
 
 ```text
 ansible/
@@ -322,7 +376,7 @@ ansible/
 ├── ansible.cfg
 ├── requirements.yml
 ├── inventory/
-│   └── aws_ec2.yml
+│   └── cluster.aws_ec2.yml
 ├── group_vars/
 │   ├── all.yml
 │   ├── freeipa.yml
@@ -334,29 +388,36 @@ ansible/
 │   └── validate.yml
 └── roles/
     ├── common/
-    ├── storage_client/
     ├── freeipa_server/
     ├── freeipa_client/
+    ├── freeipa_identity/
+    ├── storage_client/
+    ├── scratch_storage/
     ├── munge/
     ├── mariadb/
     ├── slurmdbd/
+    ├── slurm_common/
     ├── slurm_controller/
     ├── slurm_login/
     └── slurm_compute/
 ```
 
-Implementation order:
+Implemented behavior:
 
-1. Dynamic AWS inventory and role-based groups
-2. SSM connection and base operating-system configuration
-3. Stable hostnames, DNS, and time synchronization
-4. FreeIPA server installation
-5. FreeIPA client enrollment and SSSD validation
-6. EFS client mounts and compute scratch mounts
-7. Shared MUNGE authentication
-8. MariaDB and SlurmDBD
-9. Slurm controller, login client, and compute daemons
-10. End-to-end validation playbook
+1. Tag-driven dynamic AWS inventory and role-based groups.
+2. SSM connections to private instances with no inbound SSH requirement.
+3. Rocky Linux 9 base packages, FQDN hostnames, UTC, Amazon Time Sync, AWS CLI,
+   and temporary `/etc/hosts` bootstrap resolution.
+4. Non-interactive FreeIPA installation for `cluster.internal`, with integrated
+   DNS forwarding to the VPC resolver and credentials retrieved locally from
+   Secrets Manager by the FreeIPA instance role.
+5. Client DNS configuration, one-time-password enrollment, automatic home
+   directory support, host keytab validation, and SSSD domain validation.
+6. FreeIPA `hpc_users` and `hpc_admins` groups, demonstration users, and a
+   centralized full-sudo rule for members of `hpc_admins`.
+
+The storage, MUNGE, database, and Slurm roles currently remain the next
+implementation stages.
 
 When each role is completed, update the project-status table and add its
 validation result to the next section.
@@ -369,7 +430,7 @@ Replace each pending result with sanitized evidence when that milestone passes.
 | -------------------- | ------------------------------------------ | -------------- | --------------------- |
 | Terraform formatting | Both roots pass recursive formatting       | Passed         | Add CI link later     |
 | Terraform validation | Both roots are valid                       | Passed         | Local validation      |
-| Infrastructure plan  | 50 disposable resources proposed           | Passed         | Add plan summary      |
+| Infrastructure plan  | Includes the private S3 transfer bucket     | Pending re-plan | Add plan summary      |
 | SSM registration     | Five nodes report `Online`                 | Pending        | Add screenshot/output |
 | Dynamic inventory    | Five hosts grouped by `Role`               | Pending        | Add inventory graph   |
 | FreeIPA health       | IPA services healthy                       | Pending        | Add `ipactl status`   |
@@ -421,83 +482,3 @@ compute scratch volumes. The persistent identity root and backend remain.
 Primary cost drivers are NAT gateway uptime, EC2 running hours, EBS storage,
 EFS data, and active Secrets Manager containers. Stopping EC2 does not stop the
 other charges; destroy the disposable root when the lab is not needed.
-
-## Security decisions
-
-- Private-only EC2 instances and no internet-facing SSH
-- Systems Manager administration and IMDSv2 enforcement
-- Encrypted EC2 root, scratch EBS, and EFS storage
-- Role-specific instance profiles
-- Exact GitHub OIDC subject with no wildcard
-- Least-privilege secret access by node role
-- No secret values in Terraform state or Git
-- Immediate secret deletion selected for this short-lived lab
-
-## Known limitations
-
-- Single Availability Zone and no service high availability
-- One FreeIPA server and one Slurm controller
-- MariaDB and SlurmDBD colocated with the controller
-- EFS rather than an HPC parallel filesystem
-- Fixed compute capacity rather than elastic nodes
-- NAT gateway required for outbound package installation
-- Account-specific Terraform backend configuration
-- Manual secret-value population
-- Ansible and CI/CD not implemented yet
-- CloudWatch intentionally deferred
-
-## Completion checklist
-
-- [x] Architecture documented
-- [x] Persistent and disposable Terraform roots created
-- [x] Terraform modules implemented and validated
-- [ ] Apply the uppercase identity-resource migration
-- [ ] Populate secret values securely
-- [ ] Deploy disposable infrastructure and verify SSM
-- [ ] Implement Ansible dynamic inventory and common role
-- [ ] Implement FreeIPA server and client enrollment
-- [ ] Implement EFS and compute scratch configuration
-- [ ] Implement MUNGE, MariaDB, SlurmDBD, and Slurm
-- [ ] Pass the FreeIPA-user multi-node job demonstration
-- [ ] Add CI, deploy, and destroy workflows
-- [ ] Add sanitized screenshots and command evidence
-- [ ] Finalize the CV project entry
-
-## Portfolio results
-
-Complete this section only after the acceptance tests pass.
-
-### Demonstrated outcomes
-
-<!-- Add 3-5 measurable outcomes after validation. -->
-
-### Screenshots and evidence
-
-<!-- Add sanitized Terraform, Ansible, FreeIPA, and Slurm evidence. -->
-
-### CV-ready project entry
-
-<!-- Replace this placeholder after completion:
-
-HPCSlurmFreeIPA — Automated AWS HPC Cluster
-- Built a private AWS HPC lab integrating FreeIPA centralized authentication
-  with Slurm scheduling and accounting across controller, login, and compute nodes.
-- Provisioned modular AWS infrastructure with Terraform and automated Linux and
-  service configuration through tag-driven Ansible inventory.
-- Implemented shared EFS home directories, compute scratch storage, SSM-based
-  administration, least-privilege IAM, and GitHub Actions OIDC deployment.
--->
-
-## Maintaining this README
-
-After finishing a project phase:
-
-1. Update its row in **Project status**.
-2. Add the exact result in **Validation and demonstration evidence**.
-3. Mark the corresponding item in **Completion checklist**.
-4. Add only sanitized output—never credentials, tokens, state contents, or
-   private account data.
-5. Move detailed operational instructions into the relevant component README.
-
-This keeps the opening sections concise for portfolio reviewers while the rest
-of the document provides technical evidence for engineering readers.

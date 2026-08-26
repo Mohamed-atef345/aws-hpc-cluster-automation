@@ -1,0 +1,52 @@
+- name: Configure base operating system
+  hosts: all
+  become: true
+  roles:
+    - common
+
+- name: Configure FreeIPA server
+  hosts: freeipa
+  become: true
+  roles:
+    - freeipa_server
+    - freeipa_identity
+    - storage_client
+
+- name: Enroll cluster nodes into FreeIPA
+  hosts: freeipa_clients
+  become: true
+  roles:
+    - freeipa_client
+    - storage_client
+
+- name: Configure compute scratch storage
+  hosts: compute
+  become: true
+  roles:
+    - scratch_storage
+
+- name: Configure MUNGE
+  hosts: slurm_nodes
+  become: true
+  roles:
+    - munge
+
+- name: Configure Slurm controller and accounting
+  hosts: controller
+  become: true
+  roles:
+    - mariadb
+    - slurmdbd
+    - slurm_controller
+
+- name: Configure login nodes
+  hosts: login
+  become: true
+  roles:
+    - slurm_login
+
+- name: Configure compute nodes
+  hosts: compute
+  become: true
+  roles:
+    - slurm_compute

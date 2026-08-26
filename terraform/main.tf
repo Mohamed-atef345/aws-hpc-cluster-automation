@@ -51,6 +51,14 @@ module "storage" {
 }
 
 
+module "ansible_transfer" {
+  source = "./modules/ansible_transfer"
+
+  project_name = local.common_tags.Project
+  aws_region   = var.aws_region
+}
+
+
 module "ec2_nodes" {
   source   = "./modules/ec2_node"
   for_each = local.nodes

@@ -1,0 +1,138 @@
+---
+- name: Verify the machines are running Rocky Linux 9
+  ansible.builtin.assert:
+    that:
+      - ansible_distribution == "Rocky"
+      - ansible_distribution_major_version == "9"
+      - ansible_python.version.major == 3
+    fail_msg: "Host {{ inventory_hostname }} is running {{ ansible_distribution }} {{ ansible_distribution_version }}, but Rocky Linux 9 is required."
+    success_msg: "Host {{ inventory_hostname }} OS verification passed (Rocky Linux 9)."
+
+- name: Verify required AWS inventory metadata
+  ansible.builtin.assert:
+    that:
+      - cluster_domain is defined
+      - cluster_domain | length > 0
+      - ec2_tags is defined
+      - ec2_tags['NodeName'] is defined
+      - ec2_tags['NodeName'] | length > 0
+      - ec2_tags['Role'] is defined
+      - ec2_tags['Role'] in ['freeipa', 'controller', 'login', 'compute']
+      - private_ip_address is defined
+      - private_ip_address | length > 0
+    fail_msg: "Host {{ inventory_hostname }} is missing required EC2 tags, its private IP address, or the cluster domain."
+
+- name: Install needed common packages
+  ansible.builtin.dnf:
+    name: "{{ common_packages }}"
+    state: "present"
+
+- name: Comment out default public NTP pools in chrony.conf
+  ansible.builtin.replace:
+    path: /etc/chrony.conf
+    regexp: '^(\s*pool\s+.*)$'
+    replace: '# \1'
+  notify: Restart chronyd
+
+- name: Configure Chrony to use Amazon Time Sync Service
+  ansible.builtin.lineinfile:
+    path: /etc/chrony.conf
+    line: "server 169.254.169.123 prefer iburst minpoll 4 maxpoll 4"
+    insertafter: "^#?pool"
+    state: present
+  notify: Restart chronyd
+
+- name: Ensure chronyd is enabled and running
+  ansible.builtin.systemd_service:
+    name: chronyd
+    state: started
+    enabled: true
+
+- name: Flush handlers to restart chronyd immediately
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for Chrony to synchronize with Amazon Time Sync Service
+  ansible.builtin.command: chronyc sources -n
+  register: chrony_sources
+  until: "'^* 169.254.169.123' in chrony_sources.stdout"
+  retries: 15
+  delay: 2
+  changed_when: false
+
+- name: Verify Chrony reports a synchronized clock
+  ansible.builtin.command: chronyc tracking
+  register: chrony_tracking
+  changed_when: false
+  retries: 15
+  delay: 2
+  until: chrony_tracking.stdout is search('(?m)^Leap status\s*:\s*Normal\s*$')
+
+- name: Check if AWS CLI is installed
+  ansible.builtin.stat:
+    path: /usr/local/bin/aws
+  register: aws_cli_bin
+
+- name: Install AWS CLI v2 if not present
+  ansible.builtin.shell: "curl -fsSL https://awscli.amazonaws.com/v2/install.sh | bash"
+  when: not aws_cli_bin.stat.exists
+
+- name: Verify AWS CLI is available
+  ansible.builtin.command: aws --version
+  register: aws_cli_version
+  changed_when: false
+
+- name: Set FQDN hostname for all machines
+  ansible.builtin.hostname:
+    name: "{{ ec2_tags['NodeName'] }}.{{ cluster_domain }}"
+
+
+- name: Set timezone to UTC
+  ansible.builtin.timezone:
+    name: "{{ common_timezone }}"
+
+- name: Configure temporary cluster resolution in /etc/hosts
+  ansible.builtin.blockinfile:
+    path: /etc/hosts
+    marker: "# {mark} ANSIBLE MANAGED CLUSTER HOSTS"
+    block: |
+      {% for host in groups['all'] | sort %}
+      {{ hostvars[host]['private_ip_address'] }}  {{ hostvars[host]['ec2_tags']['NodeName'] }}.{{ cluster_domain }}  {{ hostvars[host]['ec2_tags']['NodeName'] }}
+      {% endfor %}
+
+- name: Verify the configured fully qualified hostname
+  ansible.builtin.command: hostname --fqdn
+  register: configured_fqdn
+  changed_when: false
+  failed_when: configured_fqdn.stdout | trim != ec2_tags['NodeName'] ~ '.' ~ cluster_domain
+
+- name: Verify the configured short hostname
+  ansible.builtin.command: hostname --short
+  register: configured_shortname
+  changed_when: false
+  failed_when: configured_shortname.stdout | trim != ec2_tags['NodeName']
+
+- name: Verify temporary fully qualified cluster name resolution
+  ansible.builtin.command:
+    argv:
+      - getent
+      - ahostsv4
+      - "{{ hostvars[item]['ec2_tags']['NodeName'] }}.{{ cluster_domain }}"
+  loop: "{{ groups['all'] | sort }}"
+  register: cluster_fqdn_lookup
+  changed_when: false
+  failed_when: cluster_fqdn_lookup.rc != 0 or hostvars[item]['private_ip_address'] not in cluster_fqdn_lookup.stdout
+
+- name: Verify temporary short cluster name resolution
+  ansible.builtin.command:
+    argv:
+      - getent
+      - ahostsv4
+      - "{{ hostvars[item]['ec2_tags']['NodeName'] }}"
+  loop: "{{ groups['all'] | sort }}"
+  register: cluster_shortname_lookup
+  changed_when: false
+  failed_when: cluster_shortname_lookup.rc != 0 or hostvars[item]['private_ip_address'] not in cluster_shortname_lookup.stdout
+
+- name: Mark common role as completed
+  ansible.builtin.set_fact:
+    common_role_completed: true
