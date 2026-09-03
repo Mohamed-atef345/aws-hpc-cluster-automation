@@ -186,6 +186,11 @@
   loop: "{{ freeipa_partial_install_artifacts }}"
   when: freeipa_server_configured.rc != 0
 
+- name: Reload systemd daemon after removing residual unit files
+  ansible.builtin.systemd:
+    daemon_reload: true
+  when: freeipa_server_configured.rc != 0
+
 - name: Remove residual IPA state directories
   ansible.builtin.file:
     path: "{{ item }}"
@@ -197,6 +202,8 @@
     - /var/log/ipa
     - /etc/ipa/default.conf
     - /root/ipa.csr
+    - /var/log/pki
+    - /var/lib/pki
   when: freeipa_server_configured.rc != 0
 
 - name: Wait for LDAP ports to be released after cleanup
@@ -234,6 +241,7 @@
     - /var/lib/ipa-client
     - /var/lib/ipa-client/sysrestore
     - /var/log/ipa
+    - /etc/systemd/system/pki-tomcatd.target.wants
   when: freeipa_server_configured.rc != 0
 
 - name: Ensure PKI directories exist with proper pkiuser ownership

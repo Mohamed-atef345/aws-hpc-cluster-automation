@@ -3,7 +3,7 @@
   ansible.builtin.set_fact:
     scratch_volume_mappings: >-
       {{
-        block_device_mappings | default([])
+        aws_block_device_mappings | default(block_device_mappings, true) | default([])
         | selectattr('device_name', 'equalto', scratch_aws_device_name)
         | list
       }}

@@ -31,4 +31,13 @@ freeipa_partial_install_artifacts:
   - /var/lib/pki/pki-tomcat
   - /var/log/pki/pki-tomcat
   - /etc/sysconfig/pki/tomcat/pki-tomcat
+  - /etc/sysconfig/pki/tomcat
   - /etc/sysconfig/pki-tomcat
+  - /etc/sysconfig/pki
+  - /etc/systemd/system/pki-tomcatd.target.wants/pki-tomcatd@pki-tomcat.service
+  - /etc/systemd/system/pki-tomcatd.target.wants/pki-tomcatd@{{ freeipa_pki_server_instance }}.service
+  - /etc/systemd/system/pki-tomcatd@pki-tomcat.service.d
+  - /etc/systemd/system/pki-tomcatd@{{ freeipa_pki_server_instance }}.service.d
+  - /etc/systemd/system/multi-user.target.wants/pki-tomcatd@pki-tomcat.service
+  - /etc/systemd/system/multi-user.target.wants/pki-tomcatd@{{ freeipa_pki_server_instance }}.service
+  - /etc/systemd/system/pki-tomcatd.target.wants

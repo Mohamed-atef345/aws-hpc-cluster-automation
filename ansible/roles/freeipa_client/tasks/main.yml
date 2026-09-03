@@ -122,9 +122,10 @@
     client_fqdn="{{ aws_ec2_tags['NodeName'] }}.{{ cluster_domain }}"
     client_ip="{{ aws_private_ip_address }}"
 
-    # 4. Pre-create client host and request random OTP (or refresh OTP if host exists)
+    # 4. Pre-create client host and request random OTP (or re-create if host exists)
     if ! otp_output="$(ipa host-add "$client_fqdn" --ip-address="$client_ip" --random 2>&1)"; then
-      otp_output="$(ipa host-mod "$client_fqdn" --random 2>&1)"
+      ipa host-del "$client_fqdn" >/dev/null 2>&1 || true
+      otp_output="$(ipa host-add "$client_fqdn" --ip-address="$client_ip" --random 2>&1)"
     fi
 
     # 5. Extract OTP from output
@@ -178,7 +179,9 @@
       - "{{ freeipa_domain }}"
   register: sssd_domain_status
   changed_when: false
-  failed_when: >-
-    sssd_domain_status.rc != 0 or
-    'Not operational' in sssd_domain_status.stdout or
-    'Online status: Online' not in sssd_domain_status.stdout
+  retries: 10
+  delay: 3
+  until: >-
+    sssd_domain_status.rc == 0 and
+    'Not operational' not in sssd_domain_status.stdout and
+    'Online status: Online' in sssd_domain_status.stdout
