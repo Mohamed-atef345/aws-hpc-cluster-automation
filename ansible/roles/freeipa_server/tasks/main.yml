@@ -198,9 +198,7 @@
     - /var/lib/ipa
     - /var/lib/sss/db
     - /var/lib/sss/mc
-    - /var/lib/ipa/sysrestore
     - /var/log/ipa
-    - /etc/ipa
     - /root/ipa.csr
   when:
     - freeipa_server_configured.rc != 0
