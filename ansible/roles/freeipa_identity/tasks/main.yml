@@ -174,7 +174,12 @@
           - --cmdcat=all
           - --runasusercat=all
           - --runasgroupcat=all
-      changed_when: false
+      register: hpc_admin_sudo_rule_modification
+      changed_when: hpc_admin_sudo_rule_modification.rc == 0
+      failed_when: >-
+        hpc_admin_sudo_rule_modification.rc != 0 and
+        'no modifications to be performed' not in
+        hpc_admin_sudo_rule_modification.stderr
 
     - name: Assign the HPC administrators group to the sudo rule
       ansible.builtin.command:
