@@ -122,10 +122,11 @@
     client_fqdn="{{ aws_ec2_tags['NodeName'] }}.{{ cluster_domain }}"
     client_ip="{{ aws_private_ip_address }}"
 
-    # 4. Pre-create client host and request random OTP (or re-create if host exists)
+    # 4. Pre-create the host and request an OTP. If stale host or DNS state
+    # exists, recreate the host without trying to add the existing A record.
     if ! otp_output="$(ipa host-add "$client_fqdn" --ip-address="$client_ip" --random 2>&1)"; then
       ipa host-del "$client_fqdn" >/dev/null 2>&1 || true
-      otp_output="$(ipa host-add "$client_fqdn" --ip-address="$client_ip" --random 2>&1)"
+      otp_output="$(ipa host-add "$client_fqdn" --random 2>&1)"
     fi
 
     # 5. Extract OTP from output
