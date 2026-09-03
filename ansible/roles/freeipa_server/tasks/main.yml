@@ -7,54 +7,24 @@
       - common_role_completed | bool
     fail_msg: "The common role has not completed successfully on this host."
 
-- name: Confirm that the instance role is FreeIPA
+- name: Confirm that this host is the FreeIPA server
   ansible.builtin.assert:
     that:
       - aws_ec2_tags is defined
-      - aws_ec2_tags['Role'] is defined
-      - aws_ec2_tags['Role'] == 'freeipa'
-    fail_msg: "The EC2 instance is not tagged with Role=freeipa."
+      - aws_ec2_tags['Role'] | default('') == 'freeipa'
+      - aws_ec2_tags['NodeName'] | default('') == freeipa_server_shortname
+      - aws_private_ip_address == freeipa_server_ip
+    fail_msg: "The target host does not match the expected FreeIPA instance."
 
-- name: Confirm FreeIPA FQDN temporarily resolves to its private IP
-  ansible.builtin.command:
-    argv:
-      - getent
-      - ahostsv4
-      - "{{ freeipa_server_fqdn }}"
-  register: freeipa_fqdn_lookup
-  changed_when: false
-  failed_when: >-
-    freeipa_fqdn_lookup.rc != 0 or
-    (freeipa_fqdn_lookup.stdout.split() | first | default('')) != freeipa_server_ip
-
-- name: Confirm the FreeIPA credentials secret has both required values
-  ansible.builtin.shell: |
-    set -euo pipefail
-
-    {{ aws_cli_executable | quote }} secretsmanager get-secret-value \
-      --secret-id {{ freeipa_credentials_secret_name | quote }} \
-      --region {{ aws_region | quote }} \
-      --query SecretString \
-      --output text \
-      --no-cli-pager \
-    | jq -e '
-        (.admin_password | type == "string" and length > 0) and
-        (.directory_manager_password | type == "string" and length > 0)
-      ' >/dev/null
-  args:
-    executable: /bin/bash
-  changed_when: false
-  no_log: true
-
-- name: Install the FreeIPA server and integrated DNS packages
+- name: Install FreeIPA packages
   block:
-    - name: Install FreeIPA packages
+    - name: Install FreeIPA package dependencies
       ansible.builtin.dnf:
         name: "{{ freeipa_server_packages }}"
         state: present
         update_cache: true
   rescue:
-    - name: Clear stale DNF cache after a package transaction failure
+    - name: Clear stale DNF metadata and packages
       ansible.builtin.command:
         argv:
           - dnf
@@ -62,7 +32,7 @@
           - all
       changed_when: true
 
-    - name: Rebuild DNF metadata cache
+    - name: Rebuild DNF metadata
       ansible.builtin.command:
         argv:
           - dnf
@@ -70,7 +40,7 @@
           - --refresh
       changed_when: true
 
-    - name: Retry FreeIPA package installation with a fresh cache
+    - name: Retry FreeIPA package installation
       ansible.builtin.dnf:
         name: "{{ freeipa_server_packages }}"
         state: present
@@ -82,7 +52,7 @@
     enabled: true
     state: started
 
-- name: Open the FreeIPA and DNS firewalld services
+- name: Open FreeIPA firewall services
   ansible.posix.firewalld:
     service: "{{ item }}"
     permanent: true
@@ -90,7 +60,20 @@
     immediate: true
   loop: "{{ freeipa_firewalld_services }}"
 
-- name: Check whether the FreeIPA server installation is complete
+- name: Confirm FreeIPA hostname resolves to the private address
+  ansible.builtin.command:
+    argv:
+      - getent
+      - ahostsv4
+      - "{{ freeipa_server_fqdn }}"
+  register: freeipa_hostname_lookup
+  changed_when: false
+  failed_when: >-
+    freeipa_hostname_lookup.rc != 0 or
+    (freeipa_hostname_lookup.stdout.split() | first | default('')) !=
+    freeipa_server_ip
+
+- name: Check whether FreeIPA is already configured
   ansible.builtin.command:
     argv:
       - /usr/bin/python3
@@ -102,74 +85,282 @@
   changed_when: false
   failed_when: false
 
-- name: Check for state left by an incomplete FreeIPA installation
-  ansible.builtin.stat:
-    path: "{{ freeipa_server_state_file }}"
-  register: freeipa_server_state
+- name: Install FreeIPA when it is not already configured
   when: freeipa_server_configured.rc != 0
+  block:
+    - name: Retrieve FreeIPA credentials from AWS Secrets Manager
+      ansible.builtin.command:
+        argv:
+          - "{{ aws_cli_executable }}"
+          - secretsmanager
+          - get-secret-value
+          - --secret-id
+          - "{{ freeipa_credentials_secret_name }}"
+          - --region
+          - "{{ aws_region }}"
+          - --query
+          - SecretString
+          - --output
+          - text
+          - --no-cli-pager
+      register: freeipa_secret_json
+      changed_when: false
+      no_log: true
 
-- name: Clean up an incomplete FreeIPA installation
+    - name: Read FreeIPA credentials
+      ansible.builtin.set_fact:
+        freeipa_admin_password: >-
+          {{ (freeipa_secret_json.stdout | from_json).admin_password | default('') }}
+        freeipa_directory_manager_password: >-
+          {{ (freeipa_secret_json.stdout | from_json).directory_manager_password | default('') }}
+      no_log: true
+
+    - name: Verify FreeIPA credentials are installer compatible
+      ansible.builtin.assert:
+        that:
+          - >-
+            freeipa_admin_password | length >= freeipa_password_min_length
+          - >-
+            freeipa_admin_password | length <= freeipa_password_max_length
+          - >-
+            freeipa_directory_manager_password | length >=
+            freeipa_password_min_length
+          - >-
+            freeipa_directory_manager_password | length <=
+            freeipa_password_max_length
+          - freeipa_admin_password is match('^[A-Za-z0-9]+$')
+          - >-
+            freeipa_directory_manager_password is match('^[A-Za-z0-9]+$')
+        fail_msg: >-
+          FreeIPA passwords must each be 12-32 ASCII alphanumeric characters.
+          Rotate the credentials secret before installing FreeIPA.
+      no_log: true
+
+    - name: Check for another FreeIPA installation process
+      ansible.builtin.command:
+        argv:
+          - pgrep
+          - -af
+          - "[i]pa-server-install|[p]kispawn"
+      register: freeipa_running_installers
+      changed_when: false
+      failed_when: freeipa_running_installers.rc not in [0, 1]
+
+    - name: Refuse a concurrent FreeIPA installation
+      ansible.builtin.assert:
+        that:
+          - freeipa_running_installers.stdout | trim | length == 0
+        fail_msg: >-
+          Another FreeIPA installation is already running:
+          {{ freeipa_running_installers.stdout }}
+
+    - name: Check for incomplete FreeIPA installation indicators
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop: "{{ freeipa_partial_install_indicators }}"
+      register: freeipa_partial_indicator_stats
+
+    - name: Determine whether incomplete FreeIPA state exists
+      ansible.builtin.set_fact:
+        freeipa_cleanup_required: >-
+          {{
+            freeipa_partial_indicator_stats.results |
+            selectattr('stat.exists') |
+            list |
+            length > 0
+          }}
+
+    - name: Run the supported FreeIPA uninstaller for incomplete state
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/flock
+          - --nonblock
+          - --conflict-exit-code
+          - "75"
+          - /run/freeipa-server-install.lock
+          - /usr/sbin/ipa-server-install
+          - --uninstall
+          - --unattended
+      register: freeipa_uninstall_attempt
+      changed_when: true
+      failed_when: false
+      when: freeipa_cleanup_required | bool
+
+    - name: Stop cleanup if another automation owns the installation lock
+      ansible.builtin.fail:
+        msg: "Another automation run is modifying FreeIPA on this server."
+      when:
+        - freeipa_cleanup_required | bool
+        - freeipa_uninstall_attempt.rc == 75
+
+    - name: Check for residual PKI and Directory Server instances
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - "{{ freeipa_pki_server_path }}"
+        - "{{ freeipa_directory_server_path }}"
+      register: freeipa_residual_instance_stats
+      when: freeipa_cleanup_required | bool
+
+    - name: Stop services belonging to an incomplete FreeIPA installation
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        enabled: false
+        state: stopped
+      loop: "{{ freeipa_partial_install_services }}"
+      failed_when: false
+      when: freeipa_cleanup_required | bool
+
+    - name: Remove a residual PKI server instance
+      ansible.builtin.command:
+        argv:
+          - pki-server
+          - remove
+          - --force
+          - --remove-conf
+          - "{{ freeipa_pki_server_instance }}"
+      changed_when: true
+      when:
+        - freeipa_cleanup_required | bool
+        - freeipa_residual_instance_stats.results[0].stat.exists | default(false)
+
+    - name: Remove a residual Directory Server instance
+      ansible.builtin.command:
+        argv:
+          - dsctl
+          - "{{ freeipa_directory_server_instance }}"
+          - remove
+          - --do-it
+      changed_when: true
+      when:
+        - freeipa_cleanup_required | bool
+        - freeipa_residual_instance_stats.results[1].stat.exists | default(false)
+
+    - name: Remove stale FreeIPA bootstrap artifacts
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop: "{{ freeipa_partial_install_artifacts }}"
+      when: freeipa_cleanup_required | bool
+
+    - name: Ensure FreeIPA state directories exist after cleanup
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      loop: "{{ freeipa_state_directories }}"
+
+    - name: Confirm required FreeIPA TCP ports are available
+      ansible.builtin.wait_for:
+        port: "{{ item }}"
+        state: stopped
+        timeout: 10
+      loop: "{{ freeipa_required_tcp_ports }}"
+
+    - name: Install the FreeIPA server
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/flock
+          - --nonblock
+          - --conflict-exit-code
+          - "75"
+          - /run/freeipa-server-install.lock
+          - /usr/sbin/ipa-server-install
+          - --unattended
+          - --hostname
+          - "{{ freeipa_server_fqdn }}"
+          - --ip-address
+          - "{{ freeipa_server_ip }}"
+          - --domain
+          - "{{ freeipa_domain }}"
+          - --realm
+          - "{{ freeipa_realm }}"
+          - --setup-dns
+          - --forwarder
+          - "{{ freeipa_dns_forwarder }}"
+          - --reverse-zone
+          - "{{ freeipa_reverse_zone }}"
+          - --no-dnssec-validation
+          - --no-host-dns
+          - --no-ntp
+          - --admin-password
+          - "{{ freeipa_admin_password }}"
+          - --ds-password
+          - "{{ freeipa_directory_manager_password }}"
+      register: freeipa_install_attempt
+      changed_when: freeipa_install_attempt.rc == 0
+      failed_when: false
+      no_log: true
+
+    - name: Stop if another automation owns the installation lock
+      ansible.builtin.fail:
+        msg: "Another automation run is installing FreeIPA on this server."
+      when: freeipa_install_attempt.rc == 75
+
+    - name: Read FreeIPA installation errors
+      ansible.builtin.shell: |
+        set -o pipefail
+        grep -Ei \
+          'error|critical|exception|failed|requires|currently in use|unable|invalid' \
+          /var/log/ipaserver-install.log 2>/dev/null |
+          tail -n 120
+      args:
+        executable: /bin/bash
+      register: freeipa_install_diagnostics
+      changed_when: false
+      failed_when: false
+      when: freeipa_install_attempt.rc not in [0, 75]
+
+    - name: Display FreeIPA installation errors
+      ansible.builtin.debug:
+        var: freeipa_install_diagnostics.stdout_lines
+      when: freeipa_install_attempt.rc not in [0, 75]
+
+    - name: Confirm a FreeIPA installation attempt succeeded
+      ansible.builtin.assert:
+        that:
+          - freeipa_install_attempt.rc == 0
+        fail_msg: >-
+          FreeIPA installation failed. Review the sanitized diagnostic output
+          immediately above.
+
+    - name: Clear FreeIPA credentials from Ansible host facts
+      ansible.builtin.set_fact:
+        freeipa_admin_password: null
+        freeipa_directory_manager_password: null
+        freeipa_secret_json: null
+      no_log: true
+
+- name: Confirm FreeIPA is configured
   ansible.builtin.command:
     argv:
-      - ipa-server-install
-      - --uninstall
-      - --unattended
-  changed_when: true
-  when:
-    - freeipa_server_configured.rc != 0
-    - freeipa_server_state.stat.exists | default(false)
+      - /usr/bin/python3
+      - -c
+      - >-
+        from ipalib.facts import is_ipa_configured;
+        raise SystemExit(0 if is_ipa_configured() else 1)
+  changed_when: false
 
-- name: Install the FreeIPA server non-interactively
-  ansible.builtin.shell: |
-    set -euo pipefail
-
-    secret_json="$(
-      {{ aws_cli_executable | quote }} secretsmanager get-secret-value \
-        --secret-id {{ freeipa_credentials_secret_name | quote }} \
-        --region {{ aws_region | quote }} \
-        --query SecretString \
-        --output text \
-        --no-cli-pager
-    )"
-
-    admin_password="$(jq -er '.admin_password' <<< "$secret_json")"
-    directory_manager_password="$(
-      jq -er '.directory_manager_password' <<< "$secret_json"
-    )"
-
-    ipa-server-install \
-      --unattended \
-      --hostname {{ freeipa_server_fqdn | quote }} \
-      --ip-address {{ freeipa_server_ip | quote }} \
-      --domain {{ freeipa_domain | quote }} \
-      --realm {{ freeipa_realm | quote }} \
-      --setup-dns \
-      --forwarder {{ freeipa_dns_forwarder | quote }} \
-      --reverse-zone {{ freeipa_reverse_zone | quote }} \
-      --admin-password "$admin_password" \
-      --ds-password "$directory_manager_password"
-
-    unset secret_json admin_password directory_manager_password
-  args:
-    executable: /bin/bash
-  when: freeipa_server_configured.rc != 0
-  changed_when: true
-  no_log: true
-
-- name: Enable and start the FreeIPA service
+- name: Ensure FreeIPA is enabled and running
   ansible.builtin.systemd_service:
     name: ipa
     enabled: true
     state: started
 
-- name: Confirm all FreeIPA services are running
+- name: Verify FreeIPA services
   ansible.builtin.command:
     argv:
       - ipactl
       - status
+  register: freeipa_service_status
   changed_when: false
+  retries: 6
+  delay: 10
+  until: freeipa_service_status.rc == 0
 
-- name: Query the FreeIPA server A record from integrated DNS
+- name: Verify FreeIPA DNS record
   ansible.builtin.command:
     argv:
       - dig
@@ -179,11 +370,13 @@
       - A
   register: freeipa_a_record
   changed_when: false
-  failed_when: >-
-    freeipa_a_record.rc != 0 or
-    freeipa_server_ip not in freeipa_a_record.stdout_lines
+  retries: 6
+  delay: 5
+  until: >-
+    freeipa_a_record.rc == 0 and
+    freeipa_server_ip in freeipa_a_record.stdout_lines
 
-- name: Query the LDAP service record from integrated DNS
+- name: Verify FreeIPA LDAP service record
   ansible.builtin.command:
     argv:
       - dig
@@ -191,13 +384,15 @@
       - "@127.0.0.1"
       - "_ldap._tcp.{{ freeipa_domain }}"
       - SRV
-  register: freeipa_ldap_srv_record
+  register: freeipa_ldap_record
   changed_when: false
-  failed_when: >-
-    freeipa_ldap_srv_record.rc != 0 or
-    freeipa_ldap_srv_record.stdout | trim | length == 0
+  retries: 6
+  delay: 5
+  until: >-
+    freeipa_ldap_record.rc == 0 and
+    freeipa_server_fqdn + '.' in freeipa_ldap_record.stdout
 
-- name: Query the Kerberos service record from integrated DNS
+- name: Verify FreeIPA Kerberos service record
   ansible.builtin.command:
     argv:
       - dig
@@ -205,13 +400,15 @@
       - "@127.0.0.1"
       - "_kerberos._udp.{{ freeipa_domain }}"
       - SRV
-  register: freeipa_kerberos_srv_record
+  register: freeipa_kerberos_record
   changed_when: false
-  failed_when: >-
-    freeipa_kerberos_srv_record.rc != 0 or
-    freeipa_kerberos_srv_record.stdout | trim | length == 0
+  retries: 6
+  delay: 5
+  until: >-
+    freeipa_kerberos_record.rc == 0 and
+    freeipa_server_fqdn + '.' in freeipa_kerberos_record.stdout
 
-- name: Verify that integrated DNS forwarding works
+- name: Verify integrated DNS forwarding
   ansible.builtin.command:
     argv:
       - dig
@@ -219,11 +416,13 @@
       - "@127.0.0.1"
       - "{{ freeipa_dns_forward_test_name }}"
       - A
-  register: freeipa_forwarded_dns_record
+  register: freeipa_forwarded_record
   changed_when: false
-  failed_when: >-
-    freeipa_forwarded_dns_record.rc != 0 or
-    freeipa_forwarded_dns_record.stdout | trim | length == 0
+  retries: 6
+  delay: 5
+  until: >-
+    freeipa_forwarded_record.rc == 0 and
+    freeipa_forwarded_record.stdout | trim | length > 0
 
 - name: Record successful completion of the FreeIPA server role
   ansible.builtin.set_fact:

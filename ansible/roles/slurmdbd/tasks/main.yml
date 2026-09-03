@@ -9,9 +9,9 @@
   ansible.builtin.template:
     src: slurmdbd.conf.j2
     dest: "{{ slurmdbd_config_path }}"
-    owner: root
+    owner: slurm
     group: slurm
-    mode: "0640"
+    mode: "0600"
   register: slurmdbd_configuration
   no_log: true
 

@@ -283,6 +283,7 @@ data "aws_iam_policy_document" "terraform_infrastructure" {
     sid = "ManageProjectNetworkAndCompute"
     actions = [
       "ec2:AllocateAddress",
+      "ec2:AssociateAddress",
       "ec2:AssociateRouteTable",
       "ec2:AttachInternetGateway",
       "ec2:AttachVolume",
@@ -312,6 +313,7 @@ data "aws_iam_policy_document" "terraform_infrastructure" {
       "ec2:DeleteVpc",
       "ec2:DetachInternetGateway",
       "ec2:DetachVolume",
+      "ec2:DisassociateAddress",
       "ec2:DisassociateRouteTable",
       "ec2:ModifyInstanceAttribute",
       "ec2:ModifyNetworkInterfaceAttribute",

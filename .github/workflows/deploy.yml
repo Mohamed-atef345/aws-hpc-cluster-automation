@@ -113,8 +113,11 @@ jobs:
           }
 
           if [[ "$(current_version_count "$freeipa_secret_name")" == "0" ]]; then
-            admin_password="$(openssl rand -hex 32)"
-            directory_manager_password="$(openssl rand -hex 32)"
+            # FreeIPA uses the Directory Manager password to protect PKCS#12
+            # bootstrap bundles. Keep both credentials within the compatible
+            # 12-32 character range enforced by the Ansible role.
+            admin_password="$(openssl rand -hex 16)"
+            directory_manager_password="$(openssl rand -hex 16)"
 
             jq -n \
               --arg admin_password "$admin_password" \
@@ -261,7 +264,6 @@ jobs:
             -i inventory/cluster.aws_ec2.yml \
             -e "ansible_aws_ssm_bucket_name=${ANSIBLE_TRANSFER_BUCKET}" \
             playbooks/validate.yml
-
 
 
 

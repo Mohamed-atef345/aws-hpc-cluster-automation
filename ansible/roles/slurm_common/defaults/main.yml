@@ -2,6 +2,8 @@ slurm_controller_host: "{{ slurm_controller_shortname }}"
 slurm_compute_group: compute
 slurm_packages:
   - "slurm-{{ slurm_package_version }}"
+slurm_service_uid: 991
+slurm_service_gid: 991
 slurm_directories_root:
   - /etc/slurm
   - /var/spool/slurmd

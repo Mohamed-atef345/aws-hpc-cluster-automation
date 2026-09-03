@@ -1,9 +1,11 @@
 ---
 
 freeipa_server_packages:
+  - bind-utils
   - firewalld
   - ipa-server
   - ipa-server-dns
+  - util-linux
 
 freeipa_firewalld_services:
   - freeipa-4
@@ -14,4 +16,53 @@ freeipa_dns_forwarder: 10.20.0.2
 freeipa_reverse_zone: 10.20.10.in-addr.arpa.
 freeipa_dns_forward_test_name: aws.amazon.com
 
-freeipa_server_state_file: /var/lib/ipa/sysrestore/sysrestore.state
+freeipa_password_min_length: 12
+freeipa_password_max_length: 32
+
+freeipa_directory_server_instance: "{{ freeipa_realm | replace('.', '-') }}"
+freeipa_directory_server_path: >-
+  /etc/dirsrv/slapd-{{ freeipa_directory_server_instance }}
+freeipa_pki_server_instance: pki-tomcat
+freeipa_pki_server_path: /etc/pki/pki-tomcat
+
+freeipa_partial_install_indicators:
+  - /etc/ipa/default.conf
+  - /var/lib/ipa/sysrestore/sysrestore.state
+  - "{{ freeipa_directory_server_path }}"
+  - "{{ freeipa_pki_server_path }}"
+  - /root/ca-agent.p12
+  - /root/cacert.p12
+
+freeipa_partial_install_services:
+  - ipa.service
+  - "pki-tomcatd@{{ freeipa_pki_server_instance }}.service"
+  - "dirsrv@{{ freeipa_directory_server_instance }}.service"
+  - ipa-custodia.service
+  - kadmin.service
+  - krb5kdc.service
+  - named.service
+  - httpd.service
+
+freeipa_partial_install_artifacts:
+  - /root/.dogtag/pki-tomcat
+  - /root/.ipa_cache
+  - /root/ca-agent.p12
+  - /root/cacert.p12
+  - /root/ipa.csr
+  - /etc/ipa/default.conf
+  - /etc/ipa/ca.crt
+
+freeipa_state_directories:
+  - /var/lib/ipa/sysrestore
+  - /var/lib/ipa/sysupgrade
+
+freeipa_required_tcp_ports:
+  - 53
+  - 80
+  - 88
+  - 389
+  - 443
+  - 464
+  - 636
+  - 8080
+  - 8443

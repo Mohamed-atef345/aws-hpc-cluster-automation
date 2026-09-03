@@ -140,6 +140,10 @@
       register: hpc_group_membership_result
       changed_when: >-
         'Number of members added 1' in hpc_group_membership_result.stdout
+      failed_when: >-
+        hpc_group_membership_result.rc != 0 and
+        'This entry is already a member' not in
+        hpc_group_membership_result.stdout
 
     - name: Check if the HPC administrators sudo rule exists
       ansible.builtin.command:
@@ -170,7 +174,12 @@
           - --cmdcat=all
           - --runasusercat=all
           - --runasgroupcat=all
-      changed_when: false
+      register: hpc_admin_sudo_rule_modification
+      changed_when: hpc_admin_sudo_rule_modification.rc == 0
+      failed_when: >-
+        hpc_admin_sudo_rule_modification.rc != 0 and
+        'no modifications to be performed' not in
+        hpc_admin_sudo_rule_modification.stderr
 
     - name: Assign the HPC administrators group to the sudo rule
       ansible.builtin.command:
@@ -182,6 +191,10 @@
       register: hpc_admin_sudo_group_result
       changed_when: >-
         'Number of members added 1' in hpc_admin_sudo_group_result.stdout
+      failed_when: >-
+        hpc_admin_sudo_group_result.rc != 0 and
+        'This entry is already a member' not in
+        hpc_admin_sudo_group_result.stdout
 
   always:
     - name: Destroy the isolated Kerberos administrator ticket

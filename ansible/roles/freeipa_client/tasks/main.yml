@@ -117,14 +117,16 @@
     admin_password="$(jq -er '.admin_password' <<< "$secret_json")"
 
     # 3. Obtain Kerberos ticket as admin in the isolated ccache
-    printf '%s\n' "$admin_password" | kinit admin
+    printf '%s\n' "$admin_password" | kinit admin >/dev/null 2>&1
 
     client_fqdn="{{ aws_ec2_tags['NodeName'] }}.{{ cluster_domain }}"
     client_ip="{{ aws_private_ip_address }}"
 
-    # 4. Pre-create client host and request random OTP (or refresh OTP if host exists)
+    # 4. Pre-create the host and request an OTP. If stale host or DNS state
+    # exists, recreate the host without trying to add the existing A record.
     if ! otp_output="$(ipa host-add "$client_fqdn" --ip-address="$client_ip" --random 2>&1)"; then
-      otp_output="$(ipa host-mod "$client_fqdn" --random 2>&1)"
+      ipa host-del "$client_fqdn" >/dev/null 2>&1 || true
+      otp_output="$(ipa host-add "$client_fqdn" --random 2>&1)"
     fi
 
     # 5. Extract OTP from output
@@ -155,7 +157,7 @@
       - --domain={{ freeipa_domain }}
       - --realm={{ freeipa_realm }}
       - --server={{ freeipa_server_fqdn }}
-      - --password={{ freeipa_client_otp.stdout | trim }}
+      - --password={{ freeipa_client_otp.stdout_lines | last | trim }}
       - --mkhomedir
       - --no-ntp
       - --enable-dns-updates
@@ -178,7 +180,9 @@
       - "{{ freeipa_domain }}"
   register: sssd_domain_status
   changed_when: false
-  failed_when: >-
-    sssd_domain_status.rc != 0 or
-    'Not operational' in sssd_domain_status.stdout or
-    'Online status: Online' not in sssd_domain_status.stdout
+  retries: 10
+  delay: 3
+  until: >-
+    sssd_domain_status.rc == 0 and
+    'Not operational' not in sssd_domain_status.stdout and
+    'Online status: Online' in sssd_domain_status.stdout
