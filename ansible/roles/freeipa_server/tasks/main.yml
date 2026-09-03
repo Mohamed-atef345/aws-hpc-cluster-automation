@@ -209,13 +209,18 @@
     - 636
   when: freeipa_server_configured.rc != 0
 
-- name: Ensure /etc/ipa directory exists for the installer
+- name: Ensure directories required by ipa-server-install exist
   ansible.builtin.file:
-    path: /etc/ipa
+    path: "{{ item }}"
     state: directory
     owner: root
     group: root
     mode: "0755"
+  loop:
+    - /etc/ipa
+    - /var/lib/ipa
+    - /var/lib/ipa/sysrestore
+    - /var/log/ipa
   when: freeipa_server_configured.rc != 0
 
 - name: Retrieve FreeIPA credentials from Secrets Manager
