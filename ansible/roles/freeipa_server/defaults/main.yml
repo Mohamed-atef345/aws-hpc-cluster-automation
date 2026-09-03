@@ -15,6 +15,14 @@ freeipa_reverse_zone: 10.20.10.in-addr.arpa.
 freeipa_dns_forward_test_name: aws.amazon.com
 
 freeipa_server_state_file: /var/lib/ipa/sysrestore/sysrestore.state
-freeipa_partial_install_services:
-  - pki-tomcatd@pki-tomcat.service
-  - "dirsrv@{{ freeipa_realm | replace('.', '-') }}.service"
+freeipa_directory_server_instance: "{{ freeipa_realm | replace('.', '-') }}"
+freeipa_directory_server_path: >-
+  /etc/dirsrv/slapd-{{ freeipa_directory_server_instance }}
+freeipa_pki_server_instance: pki-tomcat
+freeipa_pki_server_path: /etc/pki/pki-tomcat
+freeipa_partial_install_artifacts:
+  - /root/.dogtag/pki-tomcat
+  - /root/.ipa_cache
+  - /root/ca-agent.p12
+  - /root/cacert.p12
+  - /root/ipa.csr

@@ -115,31 +115,87 @@
       - --uninstall
       - --unattended
   changed_when: true
+  failed_when: false
   when:
     - freeipa_server_configured.rc != 0
     - freeipa_server_state.stat.exists | default(false)
 
-- name: Stop services left running by an incomplete FreeIPA installation
+- name: Check for a residual PKI server instance
+  ansible.builtin.stat:
+    path: "{{ freeipa_pki_server_path }}"
+  register: freeipa_residual_pki_server
+  when: freeipa_server_configured.rc != 0
+
+- name: Check for a residual Directory Server instance
+  ansible.builtin.stat:
+    path: "{{ freeipa_directory_server_path }}"
+  register: freeipa_residual_directory_server
+  when: freeipa_server_configured.rc != 0
+
+- name: Stop a residual PKI server instance
   ansible.builtin.systemd_service:
-    name: "{{ item }}"
+    name: "pki-tomcatd@{{ freeipa_pki_server_instance }}.service"
     enabled: false
     state: stopped
-  loop: "{{ freeipa_partial_install_services }}"
   when:
     - freeipa_server_configured.rc != 0
-    - freeipa_server_state.stat.exists | default(false)
+    - freeipa_residual_pki_server.stat.exists | default(false)
+
+- name: Stop a residual Directory Server instance
+  ansible.builtin.systemd_service:
+    name: "dirsrv@{{ freeipa_directory_server_instance }}.service"
+    enabled: false
+    state: stopped
+  when:
+    - freeipa_server_configured.rc != 0
+    - freeipa_residual_directory_server.stat.exists | default(false)
+
+- name: Remove the residual PKI server instance
+  ansible.builtin.command:
+    argv:
+      - pki-server
+      - remove
+      - --force
+      - --remove-conf
+      - "{{ freeipa_pki_server_instance }}"
+  changed_when: true
+  when:
+    - freeipa_server_configured.rc != 0
+    - freeipa_residual_pki_server.stat.exists | default(false)
+
+- name: Remove the residual Directory Server instance
+  ansible.builtin.command:
+    argv:
+      - dsctl
+      - "{{ freeipa_directory_server_instance }}"
+      - remove
+      - --do-it
+  changed_when: true
+  when:
+    - freeipa_server_configured.rc != 0
+    - freeipa_residual_directory_server.stat.exists | default(false)
+
+- name: Remove stale FreeIPA certificate bootstrap artifacts
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop: "{{ freeipa_partial_install_artifacts }}"
+  when: freeipa_server_configured.rc != 0
 
 - name: Wait for LDAP ports to be released after cleanup
   ansible.builtin.wait_for:
     port: "{{ item }}"
     state: stopped
+    delay: 5
     timeout: 60
   loop:
     - 389
     - 636
   when:
     - freeipa_server_configured.rc != 0
-    - freeipa_server_state.stat.exists | default(false)
+    - >-
+      (freeipa_residual_pki_server.stat.exists | default(false)) or
+      (freeipa_residual_directory_server.stat.exists | default(false))
 
 - name: Install the FreeIPA server non-interactively
   ansible.builtin.shell: |
