@@ -13,6 +13,7 @@ slurm_controller_fqdn: ctl01.cluster.internal
 
 cluster_private_cidr: 10.20.10.0/24
 aws_region: us-east-1
+aws_cli_executable: /usr/local/bin/aws
 
 freeipa_credentials_secret_name: HPCSlurmFreeIPA/freeipa/credentials
 munge_secret_name: HPCSlurmFreeIPA/slurm/munge
