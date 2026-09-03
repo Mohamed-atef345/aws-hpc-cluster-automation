@@ -322,9 +322,10 @@ an epilog that removes only that validated numeric job directory. The login
 role installs `/shared/examples/hostname.sbatch`; it runs after the compute role
 so its example targets an already configured partition.
 
-These roles are implemented and pass local parsing and template-rendering
-checks. Their service startup, node registration, job execution, and accounting
-path have not yet been proven on deployed Rocky Linux instances.
+The deployed cluster has completed the full runtime acceptance path: SlurmDBD,
+`slurmctld`, and both `slurmd` services started successfully; `compute01` and
+`compute02` registered as idle nodes; and a two-node job completed with exit
+code `0:0`, wrote both hostnames to `/shared`, and appeared in `sacct`.
 
 ## Secret handling
 
@@ -464,6 +465,7 @@ bootstrap step and consumed directly from AWS Secrets Manager.
 │   │   └── group_vars/        # Cluster and node-role variables
 │   ├── playbooks/             # Configuration and runtime validation
 │   └── roles/                 # Identity, storage, MUNGE, MariaDB, and Slurm
+├── assets/                     # Deployment and runtime acceptance screenshots
 ├── ARCHITECTURE.md            # Architecture decisions and rationale
 └── README.md
 ```
@@ -656,10 +658,76 @@ ansible-playbook \
 Run `site.yml` twice after the initial deployment. The second run should report
 no changes for stable resources.
 
-Before deployment automation is considered complete, extend runtime acceptance
-to verify that SlurmDBD, `slurmctld`, and every `slurmd` are active; both compute
-nodes register; a FreeIPA user completes the example job; the expected output
-is written to `/shared`; and `sacct` returns its completed accounting record.
+### Deployed runtime acceptance
+
+The deployment workflow and end-to-end runtime test have completed
+successfully. The captured acceptance run confirms the following:
+
+- GitHub Actions applied the infrastructure and configured the cluster.
+- `/home` and `/shared` are mounted from EFS on `login01`.
+- FreeIPA DNS records resolve, and `hpcuser` authenticates with Kerberos and has
+  the expected POSIX identity and group membership.
+- Both compute nodes register with Slurm, and a two-node job completes with exit
+  code `0:0`, writes its output to `/shared`, and is recorded by accounting.
+
+![Successful GitHub Actions deployment](assets/Screenshot%20From%202026-09-04%2000-29-11.png)
+
+*The reviewed deployment workflow completed both Terraform and Ansible jobs.*
+
+![EFS mounts and FreeIPA DNS validation](assets/Screenshot%20From%202026-09-04%2000-32-22.png)
+
+*EFS mount sources, filesystem usage, FreeIPA user resolution, and DNS records
+verified from `login01`.*
+
+![FreeIPA Kerberos authentication](assets/Screenshot%20From%202026-09-04%2000-40-03.png)
+
+*The `hpcuser` account obtained a Kerberos ticket and returned its FreeIPA
+identity and group membership.*
+
+![Slurm job submission and accounting history](assets/Screenshot%20From%202026-09-04%2000-26-40.png)
+
+*A FreeIPA user submitted the shared example job and inspected its queue and
+accounting records.*
+
+![Successful two-node Slurm job](assets/Screenshot%20From%202026-09-04%2000-33-05.png)
+
+*Both compute nodes were idle and available; the acceptance job ran on both,
+wrote their hostnames to EFS, and completed with exit code `0:0`.*
+
+To repeat the acceptance test, first locate `login01` and connect through
+Session Manager from a workstation authenticated to AWS:
+
+```bash
+LOGIN_ID=$(aws ec2 describe-instances \
+  --region us-east-1 \
+  --filters Name=tag:Project,Values=HPCSlurmFreeIPA \
+            Name=tag:NodeName,Values=login01 \
+            Name=instance-state-name,Values=running \
+  --query 'Reservations[0].Instances[0].InstanceId' \
+  --output text)
+
+aws ssm start-session --region us-east-1 --target "$LOGIN_ID"
+```
+
+On `login01`, switch to the FreeIPA user, submit the example, wait for it to
+leave the queue, and inspect the node, output, and accounting results:
+
+```bash
+sudo install -d -m 700 -o hpcuser -g hpc_users /home/hpcuser
+sudo -iu hpcuser
+
+cp /shared/examples/hostname.sbatch ~/hostname.sbatch
+JOB_ID=$(sbatch --parsable ~/hostname.sbatch)
+echo "Submitted job: $JOB_ID"
+
+squeue -j "$JOB_ID"
+while squeue -h -j "$JOB_ID" | grep -q .; do sleep 2; done
+
+sinfo -N
+cat "/shared/hostname-${JOB_ID}.out"
+sacct -j "$JOB_ID" \
+  --format=JobID,JobName,Partition,AllocCPUS,State,ExitCode,Elapsed
+```
 
 ## CI/CD design
 
@@ -771,25 +839,22 @@ creates a reviewed destroy plan, and applies it. It must never destroy
 
 ## Current project state
 
-Terraform infrastructure and all planned Ansible roles, including SlurmDBD,
-the controller, compute, and login roles, are implemented. Both Terraform roots
-pass formatting and validation, both playbooks pass Ansible syntax checking,
-the Slurm shell templates pass `bash -n`, and representative Slurm configuration
-templates render successfully.
+The infrastructure, identity bootstrap, configuration roles, deployment
+workflow, and runtime acceptance path are implemented and have succeeded on
+AWS. The successful deployment configured five private Rocky Linux nodes
+through SSM without inbound administrative access.
 
-Static CI is implemented for Terraform formatting and validation and for
-Ansible linting and syntax checks. Before treating deployment CD as complete,
-add the Slurm service, node, submitted-job, shared-output, and accounting checks
-described above to runtime acceptance.
+The deployed environment has verified EFS mounts at `/home` and `/shared`,
+FreeIPA DNS and Kerberos authentication, centralized `hpcuser` identity,
+cross-node MUNGE authentication, MariaDB-backed Slurm accounting, and healthy
+Slurm controller and compute services. Both compute nodes registered and ran a
+single two-node job that wrote both hostnames to `/shared`; `sacct` recorded the
+job as `COMPLETED` with exit code `0:0`.
 
-Runtime validation against deployed AWS instances is still pending, so static
-checks alone cannot guarantee that package installation and service startup
-will have no environment-specific errors.
-
-The intended end-to-end acceptance test is a FreeIPA user submitting a
-multi-node job from `login01`, executing across both compute nodes, writing
-output to `/shared`, and retrieving the completed accounting record with
-`sacct`.
+Static CI continues to cover Terraform formatting and validation, Ansible lint
+and syntax checks, shell syntax, and representative configuration rendering.
+The screenshots and repeatable commands in [Deployed runtime acceptance](#deployed-runtime-acceptance)
+record the observed end-to-end result.
 
 ## Teardown and cost control
 
