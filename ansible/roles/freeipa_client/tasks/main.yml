@@ -117,7 +117,7 @@
     admin_password="$(jq -er '.admin_password' <<< "$secret_json")"
 
     # 3. Obtain Kerberos ticket as admin in the isolated ccache
-    printf '%s\n' "$admin_password" | kinit admin
+    printf '%s\n' "$admin_password" | kinit admin >/dev/null 2>&1
 
     client_fqdn="{{ aws_ec2_tags['NodeName'] }}.{{ cluster_domain }}"
     client_ip="{{ aws_private_ip_address }}"
@@ -156,7 +156,7 @@
       - --domain={{ freeipa_domain }}
       - --realm={{ freeipa_realm }}
       - --server={{ freeipa_server_fqdn }}
-      - --password={{ freeipa_client_otp.stdout | trim }}
+      - --password={{ freeipa_client_otp.stdout_lines | last | trim }}
       - --mkhomedir
       - --no-ntp
       - --enable-dns-updates
