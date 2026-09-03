@@ -90,6 +90,35 @@
     immediate: true
   loop: "{{ freeipa_firewalld_services }}"
 
+- name: Check whether the FreeIPA server installation is complete
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/python3
+      - -c
+      - >-
+        from ipalib.facts import is_ipa_configured;
+        raise SystemExit(0 if is_ipa_configured() else 1)
+  register: freeipa_server_configured
+  changed_when: false
+  failed_when: false
+
+- name: Check for state left by an incomplete FreeIPA installation
+  ansible.builtin.stat:
+    path: "{{ freeipa_server_state_file }}"
+  register: freeipa_server_state
+  when: freeipa_server_configured.rc != 0
+
+- name: Clean up an incomplete FreeIPA installation
+  ansible.builtin.command:
+    argv:
+      - ipa-server-install
+      - --uninstall
+      - --unattended
+  changed_when: true
+  when:
+    - freeipa_server_configured.rc != 0
+    - freeipa_server_state.stat.exists | default(false)
+
 - name: Install the FreeIPA server non-interactively
   ansible.builtin.shell: |
     set -euo pipefail
@@ -123,8 +152,15 @@
     unset secret_json admin_password directory_manager_password
   args:
     executable: /bin/bash
-    creates: "{{ freeipa_install_marker }}"
+  when: freeipa_server_configured.rc != 0
+  changed_when: true
   no_log: true
+
+- name: Enable and start the FreeIPA service
+  ansible.builtin.systemd_service:
+    name: ipa
+    enabled: true
+    state: started
 
 - name: Confirm all FreeIPA services are running
   ansible.builtin.command:
