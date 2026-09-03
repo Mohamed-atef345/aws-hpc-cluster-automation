@@ -47,7 +47,9 @@ The role contains the permissions required by the deployment workflow:
   by Ansible.
 - The infrastructure policy includes update operations used in place by this
   configuration: security-group rule changes, EBS volume resizing, EFS
-  file-system updates, and EFS mount-target security-group changes.
+  file-system updates, and EFS mount-target security-group changes. It also
+  grants the EC2 network-interface actions that EFS requires when creating,
+  updating, or deleting a mount target.
 - The infrastructure policy permits creation of only the Amazon EFS
   service-linked role, constrained by both its exact role ARN and the
   `iam:AWSServiceName` condition. This is needed only when EFS first creates the
