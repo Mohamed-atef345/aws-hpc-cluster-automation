@@ -1,0 +1,4 @@
+---
+skip_list:
+  # Shared cluster variables intentionally keep one name across consuming roles.
+  - var-naming[no-role-prefix]

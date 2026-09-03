@@ -7,7 +7,7 @@
       - common_role_completed | bool
     fail_msg: "The common role has not completed successfully on this host."
 
-- name:  Confirm that the instance role is a valid FreeIPA client
+- name: Confirm that the instance role is a valid FreeIPA client
   ansible.builtin.assert:
     that:
       - ec2_tags is defined
@@ -38,12 +38,10 @@
       [global-dns-domain-*]
       servers={{ freeipa_server_ip }},{{ vpc_dns_server_ip }}
   register: freeipa_dns_config
+  notify: Reload NetworkManager
 
-- name: Reload NetworkManager after DNS change
-  ansible.builtin.systemd_service:
-    name: NetworkManager
-    state: reloaded
-  when: freeipa_dns_config.changed
+- name: Apply FreeIPA DNS configuration before validation
+  ansible.builtin.meta: flush_handlers
 
 - name: Verify FreeIPA DNS records
   ansible.builtin.command:
@@ -83,12 +81,12 @@
     public_dns_lookup.rc != 0 or
     public_dns_lookup.stdout | trim | length == 0
 
-- name: insatll client packages
+- name: Install FreeIPA client packages
   ansible.builtin.dnf:
     name: "{{ freeipa_client_packages }}"
     state: present
 
-- name: enable and start oddjobd
+- name: Enable and start oddjobd
   ansible.builtin.systemd_service:
     name: oddjobd
     state: started
@@ -164,7 +162,7 @@
   no_log: true
   when: not freeipa_client_enrolled.stat.exists
 
-- name: confirm that /etc/krb5.keytab exists and not empty
+- name: Confirm that /etc/krb5.keytab exists and is not empty
   ansible.builtin.stat:
     path: /etc/krb5.keytab
   register: keytab_exists
