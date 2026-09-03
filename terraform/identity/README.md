@@ -41,7 +41,12 @@ The role contains the permissions required by the deployment workflow:
 
 - The transfer-bucket policy is restricted to the deterministic bucket derived
   from `name_prefix`, the AWS account ID, and `aws_region`. It covers the bucket
-  controls managed by Terraform and the temporary objects used by Ansible.
+  controls read and managed by Terraform and the temporary objects used by
+  Ansible.
+- The infrastructure policy permits creation of only the Amazon EFS
+  service-linked role, constrained by both its exact role ARN and the
+  `iam:AWSServiceName` condition. This is needed only when EFS first creates the
+  account-level role.
 - SSM session startup is restricted to EC2 instances tagged with the matching
   `Project` value and `ManagedBy=terraform`.
 - Status inspection, the default Session Manager document, session data
