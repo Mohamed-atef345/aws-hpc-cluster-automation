@@ -22,7 +22,7 @@
         set -euo pipefail
 
         secret_json="$(
-          aws secretsmanager get-secret-value \
+          {{ aws_cli_executable | quote }} secretsmanager get-secret-value \
             --secret-id {{ freeipa_credentials_secret_name | quote }} \
             --region {{ aws_region | quote }} \
             --query SecretString \

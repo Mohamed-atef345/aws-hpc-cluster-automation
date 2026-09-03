@@ -25,7 +25,7 @@
 - name: Retrieve the Slurm database secret
   ansible.builtin.command:
     argv:
-      - aws
+      - "{{ aws_cli_executable }}"
       - secretsmanager
       - get-secret-value
       - --secret-id
