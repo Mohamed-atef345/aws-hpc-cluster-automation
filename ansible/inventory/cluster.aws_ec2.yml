@@ -26,5 +26,9 @@ compose:
   ansible_host: aws_instance_id
   ansible_connection: '"amazon.aws.aws_ssm"'
   ansible_aws_ssm_region: aws_placement.region
+  # FreeIPA/PKI installation regularly exceeds the connection plugin's
+  # 60-second default. A timeout causes the plugin to repeat the command while
+  # the first installer is still running, so keep the session alive instead.
+  ansible_aws_ssm_timeout: '"1800"'
 
 strict: true
