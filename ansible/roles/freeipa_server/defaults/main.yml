@@ -4,6 +4,7 @@ freeipa_server_packages:
   - firewalld
   - ipa-server
   - ipa-server-dns
+  - rng-tools
 
 freeipa_firewalld_services:
   - freeipa-4

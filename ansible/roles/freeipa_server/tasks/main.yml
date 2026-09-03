@@ -90,6 +90,12 @@
     immediate: true
   loop: "{{ freeipa_firewalld_services }}"
 
+- name: Ensure rngd is enabled and running for sufficient entropy
+  ansible.builtin.systemd_service:
+    name: rngd
+    enabled: true
+    state: started
+
 - name: Check whether the FreeIPA server installation is complete
   ansible.builtin.command:
     argv:
@@ -197,41 +203,74 @@
       (freeipa_residual_pki_server.stat.exists | default(false)) or
       (freeipa_residual_directory_server.stat.exists | default(false))
 
-- name: Install the FreeIPA server non-interactively
+- name: Retrieve FreeIPA credentials from Secrets Manager
   ansible.builtin.shell: |
     set -euo pipefail
-
-    secret_json="$(
-      {{ aws_cli_executable | quote }} secretsmanager get-secret-value \
-        --secret-id {{ freeipa_credentials_secret_name | quote }} \
-        --region {{ aws_region | quote }} \
-        --query SecretString \
-        --output text \
-        --no-cli-pager
-    )"
-
-    admin_password="$(jq -er '.admin_password' <<< "$secret_json")"
-    directory_manager_password="$(
-      jq -er '.directory_manager_password' <<< "$secret_json"
-    )"
-
-    ipa-server-install \
-      --unattended \
-      --hostname {{ freeipa_server_fqdn | quote }} \
-      --ip-address {{ freeipa_server_ip | quote }} \
-      --domain {{ freeipa_domain | quote }} \
-      --realm {{ freeipa_realm | quote }} \
-      --setup-dns \
-      --forwarder {{ freeipa_dns_forwarder | quote }} \
-      --reverse-zone {{ freeipa_reverse_zone | quote }} \
-      --admin-password "$admin_password" \
-      --ds-password "$directory_manager_password"
-
-    unset secret_json admin_password directory_manager_password
+    {{ aws_cli_executable | quote }} secretsmanager get-secret-value \
+      --secret-id {{ freeipa_credentials_secret_name | quote }} \
+      --region {{ aws_region | quote }} \
+      --query SecretString \
+      --output text \
+      --no-cli-pager
   args:
     executable: /bin/bash
+  register: freeipa_secret_json
+  changed_when: false
+  no_log: true
   when: freeipa_server_configured.rc != 0
-  changed_when: true
+
+- name: Install the FreeIPA server non-interactively
+  ansible.builtin.command:
+    argv:
+      - ipa-server-install
+      - --unattended
+      - --hostname
+      - "{{ freeipa_server_fqdn }}"
+      - --ip-address
+      - "{{ freeipa_server_ip }}"
+      - --domain
+      - "{{ freeipa_domain }}"
+      - --realm
+      - "{{ freeipa_realm }}"
+      - --setup-dns
+      - --forwarder
+      - "{{ freeipa_dns_forwarder }}"
+      - --reverse-zone
+      - "{{ freeipa_reverse_zone }}"
+      - --allow-zone-overlap
+      - --no-host-dns
+      - --admin-password
+      - "{{ (freeipa_secret_json.stdout | from_json).admin_password }}"
+      - --ds-password
+      - "{{ (freeipa_secret_json.stdout | from_json).directory_manager_password }}"
+  no_log: true
+  register: freeipa_install_result
+  failed_when: false
+  when: freeipa_server_configured.rc != 0
+  changed_when: freeipa_install_result.rc | default(1) == 0
+
+- name: Show FreeIPA install log on failure
+  ansible.builtin.command: tail -n 100 /var/log/ipaserver-install.log
+  register: freeipa_install_log
+  changed_when: false
+  failed_when: false
+  when:
+    - freeipa_server_configured.rc != 0
+    - freeipa_install_result.rc | default(0) != 0
+
+- name: Display FreeIPA install failure log
+  ansible.builtin.debug:
+    var: freeipa_install_log.stdout_lines
+  when:
+    - freeipa_install_log is not skipped
+    - freeipa_install_log.stdout_lines is defined
+
+- name: Fail if FreeIPA installation failed
+  ansible.builtin.fail:
+    msg: "FreeIPA server installation failed. See the log output above for details."
+  when:
+    - freeipa_server_configured.rc != 0
+    - freeipa_install_result.rc | default(0) != 0
 
 - name: Enable and start the FreeIPA service
   ansible.builtin.systemd_service:
