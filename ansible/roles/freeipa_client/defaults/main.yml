@@ -4,7 +4,7 @@ freeipa_server_ports:
   - 389
   - 88
 freeipa_client_packages:
-  - ipa-client 
-  - sssd-tools 
+  - ipa-client
+  - sssd-tools
   - oddjob
   - oddjob-mkhomedir

@@ -46,3 +46,4 @@
       - cluster
       - "{{ slurm_cluster_name }}"
   when: slurm_cluster_name not in slurmdbd_cluster.stdout
+  changed_when: true

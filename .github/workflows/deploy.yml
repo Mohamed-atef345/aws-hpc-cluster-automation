@@ -57,15 +57,15 @@ jobs:
         with:
           terraform_version: "1.16.0"
 
-      - name: Initialize Terraform 
+      - name: Initialize Terraform
         run: terraform -chdir=terraform init -input=false
 
       - name: Plan Terraform Deployment
         run: terraform -chdir=terraform plan -out=tfplan -input=false
 
       - name: Apply Terraform Plan
-        run: terraform -chdir=terraform apply tfplan 
- 
+        run: terraform -chdir=terraform apply tfplan
+
       - name: Retrieve Terraform outputs
         id: tf_outputs
         run: |
@@ -73,7 +73,7 @@ jobs:
           echo "efs_file_system_id=$(terraform -chdir=terraform output -raw efs_file_system_id)" >> "$GITHUB_OUTPUT"
           echo "efs_home_access_point_id=$(terraform -chdir=terraform output -raw efs_home_access_point_id)" >> "$GITHUB_OUTPUT"
           echo "efs_shared_access_point_id=$(terraform -chdir=terraform output -raw efs_shared_access_point_id)" >> "$GITHUB_OUTPUT"
-          
+
       - name: Authenticate for secret bootstrap
         uses: aws-actions/configure-aws-credentials@v6.2.4
         with:
@@ -183,7 +183,7 @@ jobs:
           else
             echo "${database_secret_name} already has a current value; leaving it unchanged"
           fi
-        
+
 
   cluster_configurations:
     name: Configure Cluster with Ansible
@@ -264,4 +264,4 @@ jobs:
 
 
 
-        
+

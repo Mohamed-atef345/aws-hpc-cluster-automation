@@ -80,6 +80,7 @@
   args:
     executable: /bin/bash
   when: not aws_cli_bin.stat.exists
+  changed_when: true
 
 - name: Verify AWS CLI is available
   ansible.builtin.command: aws --version
@@ -90,10 +91,24 @@
   ansible.builtin.hostname:
     name: "{{ ec2_tags['NodeName'] }}.{{ cluster_domain }}"
 
+- name: Read the configured timezone
+  ansible.builtin.command:
+    argv:
+      - timedatectl
+      - show
+      - --property=Timezone
+      - --value
+  register: common_configured_timezone
+  changed_when: false
 
-- name: Set timezone to UTC
-  ansible.builtin.timezone:
-    name: "{{ common_timezone }}"
+- name: Set the timezone
+  ansible.builtin.command:
+    argv:
+      - timedatectl
+      - set-timezone
+      - "{{ common_timezone }}"
+  when: common_configured_timezone.stdout | trim != common_timezone
+  changed_when: true
 
 - name: Configure temporary cluster resolution in /etc/hosts
   ansible.builtin.blockinfile:
@@ -101,7 +116,8 @@
     marker: "# {mark} ANSIBLE MANAGED CLUSTER HOSTS"
     block: |
       {% for host in groups['all'] | sort %}
-      {{ hostvars[host]['private_ip_address'] }}  {{ hostvars[host]['ec2_tags']['NodeName'] }}.{{ cluster_domain }}  {{ hostvars[host]['ec2_tags']['NodeName'] }}
+      {% set node_name = hostvars[host]['ec2_tags']['NodeName'] %}
+      {{ hostvars[host]['private_ip_address'] }}  {{ node_name }}.{{ cluster_domain }}  {{ node_name }}
       {% endfor %}
 
 - name: Verify the configured fully qualified hostname

@@ -97,4 +97,4 @@ jobs:
             env:
               ANSIBLE_INVENTORY_ENABLED: host_list,auto,yaml
             run: ansible-playbook -i localhost, --syntax-check playbooks/validate.yml
-      
+

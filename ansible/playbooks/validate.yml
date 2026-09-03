@@ -61,7 +61,10 @@
     - name: Validate controller credential on compute and login nodes
       delegate_to: "{{ item }}"
       ansible.builtin.shell: |
+        set -o pipefail
         printf '%s' {{ controller_munge_token.stdout | quote }} | unmunge
+      args:
+        executable: /bin/bash
       loop: "{{ groups['slurm_nodes'] }}"
       changed_when: false
 
