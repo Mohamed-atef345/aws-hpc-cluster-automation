@@ -170,7 +170,7 @@
     systemctl stop dirsrv.target 2>/dev/null || true
     systemctl stop 'dirsrv@*' 2>/dev/null || true
     systemctl disable dirsrv.target 2>/dev/null || true
-    pkill -9 -f ns-slapd 2>/dev/null || true
+    pkill -9 -x ns-slapd 2>/dev/null || true
   args:
     executable: /bin/bash
   changed_when: true
@@ -286,11 +286,12 @@
   register: freeipa_secret_json
   changed_when: false
   no_log: true
+  when: freeipa_server_configured.rc != 0
+
 - name: Ensure LDAP ports 389 and 636 are not held by any process
   ansible.builtin.shell: |
     set -euo pipefail
-    pkill -9 -f ns-slapd 2>/dev/null || true
-    pkill -9 -f slapd 2>/dev/null || true
+    pkill -9 -x ns-slapd 2>/dev/null || true
     sleep 1
   args:
     executable: /bin/bash
