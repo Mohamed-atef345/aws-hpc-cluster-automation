@@ -47,9 +47,34 @@
   no_log: true
 
 - name: Install the FreeIPA server and integrated DNS packages
-  ansible.builtin.dnf:
-    name: "{{ freeipa_server_packages }}"
-    state: present
+  block:
+    - name: Install FreeIPA packages
+      ansible.builtin.dnf:
+        name: "{{ freeipa_server_packages }}"
+        state: present
+        update_cache: true
+  rescue:
+    - name: Clear stale DNF cache after a package transaction failure
+      ansible.builtin.command:
+        argv:
+          - dnf
+          - clean
+          - all
+      changed_when: true
+
+    - name: Rebuild DNF metadata cache
+      ansible.builtin.command:
+        argv:
+          - dnf
+          - makecache
+          - --refresh
+      changed_when: true
+
+    - name: Retry FreeIPA package installation with a fresh cache
+      ansible.builtin.dnf:
+        name: "{{ freeipa_server_packages }}"
+        state: present
+        update_cache: true
 
 - name: Enable and start firewalld
   ansible.builtin.systemd_service:
