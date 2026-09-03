@@ -146,12 +146,6 @@
   register: freeipa_residual_pki_server
   when: freeipa_server_configured.rc != 0
 
-- name: Check for a residual Directory Server instance
-  ansible.builtin.stat:
-    path: "{{ freeipa_directory_server_path }}"
-  register: freeipa_residual_directory_server
-  when: freeipa_server_configured.rc != 0
-
 - name: Remove the residual PKI server instance
   ansible.builtin.command:
     argv:
@@ -166,18 +160,23 @@
     - freeipa_server_configured.rc != 0
     - freeipa_residual_pki_server.stat.exists | default(false)
 
-- name: Remove the residual Directory Server instance
-  ansible.builtin.command:
-    argv:
-      - dsctl
-      - "{{ freeipa_directory_server_instance }}"
-      - remove
-      - --do-it
+- name: Remove all residual Directory Server instances and stop LDAP processes
+  ansible.builtin.shell: |
+    set -euo pipefail
+    for inst in $(dsctl -l 2>/dev/null || true); do
+      dsctl "$inst" stop 2>/dev/null || true
+      dsctl "$inst" remove --do-it 2>/dev/null || true
+    done
+    systemctl stop dirsrv.target 2>/dev/null || true
+    systemctl stop 'dirsrv@*' 2>/dev/null || true
+    systemctl disable dirsrv.target 2>/dev/null || true
+    pkill -9 -f ns-slapd 2>/dev/null || true
+  args:
+    executable: /bin/bash
   changed_when: true
   failed_when: false
-  when:
-    - freeipa_server_configured.rc != 0
-    - freeipa_residual_directory_server.stat.exists | default(false)
+  when: freeipa_server_configured.rc != 0
+
 
 - name: Remove stale FreeIPA certificate bootstrap artifacts
   ansible.builtin.file:
@@ -208,13 +207,16 @@
 
 - name: Wait for LDAP ports to be released after cleanup
   ansible.builtin.wait_for:
-    port: "{{ item }}"
+    host: "{{ item.host }}"
+    port: "{{ item.port }}"
     state: stopped
-    delay: 5
-    timeout: 60
+    delay: 2
+    timeout: 30
   loop:
-    - 389
-    - 636
+    - { host: "127.0.0.1", port: 389 }
+    - { host: "127.0.0.1", port: 636 }
+    - { host: "{{ freeipa_server_ip }}", port: 389 }
+    - { host: "{{ freeipa_server_ip }}", port: 636 }
   when: freeipa_server_configured.rc != 0
 
 - name: Ensure directories required by ipa-server-install exist
@@ -284,6 +286,15 @@
   register: freeipa_secret_json
   changed_when: false
   no_log: true
+- name: Ensure LDAP ports 389 and 636 are not held by any process
+  ansible.builtin.shell: |
+    set -euo pipefail
+    pkill -9 -f ns-slapd 2>/dev/null || true
+    pkill -9 -f slapd 2>/dev/null || true
+    sleep 1
+  args:
+    executable: /bin/bash
+  changed_when: false
   when: freeipa_server_configured.rc != 0
 
 - name: Install the FreeIPA server non-interactively

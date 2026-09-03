@@ -41,3 +41,7 @@ freeipa_partial_install_artifacts:
   - /etc/systemd/system/multi-user.target.wants/pki-tomcatd@pki-tomcat.service
   - /etc/systemd/system/multi-user.target.wants/pki-tomcatd@{{ freeipa_pki_server_instance }}.service
   - /etc/systemd/system/pki-tomcatd.target.wants
+  - /etc/dirsrv/slapd-{{ freeipa_directory_server_instance }}
+  - /var/lib/dirsrv/slapd-{{ freeipa_directory_server_instance }}
+  - /var/log/dirsrv/slapd-{{ freeipa_directory_server_instance }}
+  - /var/run/dirsrv
