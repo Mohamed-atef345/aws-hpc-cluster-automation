@@ -161,6 +161,7 @@ data "aws_iam_policy_document" "ansible_transfer" {
       "s3:GetBucketAcl",
       "s3:GetBucketLocation",
       "s3:GetBucketOwnershipControls",
+      "s3:GetBucketPolicy",
       "s3:GetBucketPublicAccessBlock",
       "s3:GetBucketTagging",
       "s3:GetBucketVersioning",
@@ -327,6 +328,20 @@ data "aws_iam_policy_document" "terraform_infrastructure" {
       "elasticfilesystem:UntagResource",
     ]
     resources = ["*"]
+  }
+
+  statement {
+    sid     = "CreateEFSServiceLinkedRole"
+    actions = ["iam:CreateServiceLinkedRole"]
+    resources = [
+      "arn:${data.aws_partition.current.partition}:iam::${data.aws_caller_identity.current.account_id}:role/aws-service-role/elasticfilesystem.amazonaws.com/AWSServiceRoleForAmazonElasticFileSystem*",
+    ]
+
+    condition {
+      test     = "StringEquals"
+      variable = "iam:AWSServiceName"
+      values   = ["elasticfilesystem.amazonaws.com"]
+    }
   }
 
 }
