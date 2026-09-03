@@ -110,9 +110,9 @@ locals {
       to_port     = 6817
     }
     slurm_compute = {
-      description = "Slurm daemon traffic from controller"
+      description = "Slurm daemon traffic from cluster clients"
       target_sg   = "compute"
-      source_sg   = "controller"
+      source_sg   = "cluster_client"
       protocol    = "tcp"
       from_port   = 6818
       to_port     = 6818
@@ -126,9 +126,9 @@ locals {
       to_port     = 6819
     }
     srun_return = {
-      description = "Interactive srun return traffic from compute nodes"
-      target_sg   = "login"
-      source_sg   = "compute"
+      description = "Slurm srun callbacks between cluster clients"
+      target_sg   = "cluster_client"
+      source_sg   = "cluster_client"
       protocol    = "tcp"
       from_port   = var.srun_port_min
       to_port     = var.srun_port_max
