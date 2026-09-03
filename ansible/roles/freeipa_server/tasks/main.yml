@@ -114,6 +114,24 @@
   register: freeipa_server_state
   when: freeipa_server_configured.rc != 0
 
+- name: Stop IPA-related services before cleanup
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+  loop:
+    - ipa
+    - krb5kdc
+    - kadmin
+    - named-pkcs11
+    - named
+    - "pki-tomcatd@{{ freeipa_pki_server_instance }}.service"
+    - "dirsrv@{{ freeipa_directory_server_instance }}.service"
+  failed_when: false
+  when:
+    - freeipa_server_configured.rc != 0
+    - freeipa_server_state.stat.exists | default(false)
+
 - name: Clean up an incomplete FreeIPA installation
   ansible.builtin.command:
     argv:
@@ -138,24 +156,6 @@
   register: freeipa_residual_directory_server
   when: freeipa_server_configured.rc != 0
 
-- name: Stop a residual PKI server instance
-  ansible.builtin.systemd_service:
-    name: "pki-tomcatd@{{ freeipa_pki_server_instance }}.service"
-    enabled: false
-    state: stopped
-  when:
-    - freeipa_server_configured.rc != 0
-    - freeipa_residual_pki_server.stat.exists | default(false)
-
-- name: Stop a residual Directory Server instance
-  ansible.builtin.systemd_service:
-    name: "dirsrv@{{ freeipa_directory_server_instance }}.service"
-    enabled: false
-    state: stopped
-  when:
-    - freeipa_server_configured.rc != 0
-    - freeipa_residual_directory_server.stat.exists | default(false)
-
 - name: Remove the residual PKI server instance
   ansible.builtin.command:
     argv:
@@ -165,6 +165,7 @@
       - --remove-conf
       - "{{ freeipa_pki_server_instance }}"
   changed_when: true
+  failed_when: false
   when:
     - freeipa_server_configured.rc != 0
     - freeipa_residual_pki_server.stat.exists | default(false)
@@ -177,6 +178,7 @@
       - remove
       - --do-it
   changed_when: true
+  failed_when: false
   when:
     - freeipa_server_configured.rc != 0
     - freeipa_residual_directory_server.stat.exists | default(false)
@@ -187,6 +189,22 @@
     state: absent
   loop: "{{ freeipa_partial_install_artifacts }}"
   when: freeipa_server_configured.rc != 0
+
+- name: Remove residual IPA state directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /var/lib/ipa
+    - /var/lib/sss/db
+    - /var/lib/sss/mc
+    - /var/lib/ipa/sysrestore
+    - /var/log/ipa
+    - /etc/ipa
+    - /root/ipa.csr
+  when:
+    - freeipa_server_configured.rc != 0
+    - freeipa_server_state.stat.exists | default(false)
 
 - name: Wait for LDAP ports to be released after cleanup
   ansible.builtin.wait_for:
@@ -199,9 +217,7 @@
     - 636
   when:
     - freeipa_server_configured.rc != 0
-    - >-
-      (freeipa_residual_pki_server.stat.exists | default(false)) or
-      (freeipa_residual_directory_server.stat.exists | default(false))
+    - freeipa_server_state.stat.exists | default(false)
 
 - name: Retrieve FreeIPA credentials from Secrets Manager
   ansible.builtin.shell: |
