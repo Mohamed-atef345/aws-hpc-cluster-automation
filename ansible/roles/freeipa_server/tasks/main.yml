@@ -195,6 +195,7 @@
     - /var/lib/sss/db
     - /var/lib/sss/mc
     - /var/log/ipa
+    - /etc/ipa/default.conf
     - /root/ipa.csr
   when: freeipa_server_configured.rc != 0
 
@@ -218,9 +219,36 @@
     mode: "0755"
   loop:
     - /etc/ipa
+    - /etc/ipa/custodia
+    - /etc/ipa/dnssec
     - /var/lib/ipa
     - /var/lib/ipa/sysrestore
+    - /var/lib/ipa/sysupgrade
+    - /var/lib/ipa/pki-ca
+    - /var/lib/ipa/certs
+    - /var/lib/ipa/backup
+    - /var/lib/ipa/dna
+    - /var/lib/ipa/dnssec
+    - /var/lib/ipa/gssproxy
+    - /var/lib/ipa/custodia
+    - /var/lib/ipa-client
+    - /var/lib/ipa-client/sysrestore
     - /var/log/ipa
+    - /var/log/pki
+  when: freeipa_server_configured.rc != 0
+
+- name: Ensure FreeIPA state files exist
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: touch
+    owner: root
+    group: root
+    mode: "0600"
+    modification_time: preserve
+    access_time: preserve
+  loop:
+    - /var/lib/ipa/sysrestore/sysrestore.state
+    - /var/lib/ipa/sysupgrade/sysupgrade.state
   when: freeipa_server_configured.rc != 0
 
 - name: Retrieve FreeIPA credentials from Secrets Manager
