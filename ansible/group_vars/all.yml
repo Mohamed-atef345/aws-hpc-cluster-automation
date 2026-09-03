@@ -28,3 +28,5 @@ srun_port_range: 60001-60010
 
 hpc_user_group: hpc_users
 hpc_admin_group: hpc_admins
+slurm_package_version: "22.05.9-1.el9"
+slurm_partition_name: debug

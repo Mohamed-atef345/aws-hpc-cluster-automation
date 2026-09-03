@@ -1,0 +1,31 @@
+---
+- name: Install the Slurm compute daemon
+  ansible.builtin.dnf:
+    name: "{{ slurm_compute_package }}"
+    enablerepo: crb
+    state: present
+
+- name: Deploy the Slurm prolog and epilog scripts
+  ansible.builtin.template:
+    src: "{{ item.source }}"
+    dest: "{{ item.destination }}"
+    owner: root
+    group: root
+    mode: "0755"
+  loop: "{{ slurm_compute_scripts }}"
+  register: slurm_compute_scripts_configuration
+
+- name: Enable and start the Slurm compute daemon
+  ansible.builtin.systemd_service:
+    name: "{{ slurm_daemon_service }}"
+    state: >-
+      {{
+        'restarted'
+        if (
+          (slurm_common_configuration |
+           default({'changed': false})).changed
+          or slurm_compute_scripts_configuration.changed
+        )
+        else 'started'
+      }}
+    enabled: true

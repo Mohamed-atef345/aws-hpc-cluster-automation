@@ -17,12 +17,21 @@ Implemented and syntax-valid:
 - Identity-safe compute scratch storage mounted at `/scratch`
 - Shared MUNGE authentication for all Slurm nodes
 - Controller-local MariaDB storage for Slurm accounting
+- Shared Slurm packages and inventory-derived configuration
+- SlurmDBD and `slurmctld` on the controller
+- `slurmd` plus per-job scratch prolog and epilog on compute nodes
+- Login-node Slurm client and example multi-node job
 
-The roles pass local syntax validation. Runtime validation against the deployed
-AWS environment is still pending.
+The roles pass local syntax validation, the shell templates pass `bash -n`, and
+the Slurm configuration templates render with representative inventory data.
+Runtime validation against the deployed AWS environment is still pending.
 
-SlurmDBD is the next role in the accounting path, followed by the controller,
-login, and compute Slurm roles.
+## Remaining deployment gate
+
+The variable-scope, AWS CLI installation, and FreeIPA idempotency findings from
+the September 2026 static audit are corrected. `playbooks/validate.yml` still
+needs Slurm service, node-registration, job, output, and `sacct` coverage before
+it can serve as the complete deployment acceptance gate.
 
 ## Inventory and connection
 
@@ -71,6 +80,20 @@ GitHub Actions should obtain the same Terraform output after applying the
 infrastructure and pass it through the same extra variable. The bucket name is
 not a secret.
 
+The pipeline must derive, rather than manually store, these Ansible inputs:
+
+| Ansible extra variable                | Terraform output                    |
+| ------------------------------------- | ----------------------------------- |
+| `ansible_aws_ssm_bucket_name`         | `ansible_transfer_bucket_name`      |
+| `efs_file_system_id`                  | `efs_file_system_id`                |
+| `efs_home_access_point_id`            | `efs_home_access_point_id`          |
+| `efs_shared_access_point_id`          | `efs_shared_access_point_id`        |
+
+The OIDC-provided AWS environment variables are reused automatically by the
+dynamic inventory and SSM connection plugin. The only human credential passed
+to Ansible is the protected `HPCUSER_INITIAL_PASSWORD` environment secret. Do
+not pass service credentials, the MUNGE key, or long-lived AWS keys to Ansible.
+
 ## Installation and validation
 
 From the repository root:
@@ -87,6 +110,15 @@ ansible-playbook --syntax-check playbooks/validate.yml
 
 An empty-inventory warning during a local syntax check is expected when no AWS
 instances are currently running.
+
+In CI, avoid querying AWS by replacing the last two commands with:
+
+```bash
+ANSIBLE_INVENTORY_ENABLED=host_list,auto,yaml \
+  ansible-playbook -i localhost, --syntax-check playbooks/site.yml
+ANSIBLE_INVENTORY_ENABLED=host_list,auto,yaml \
+  ansible-playbook -i localhost, --syntax-check playbooks/validate.yml
+```
 
 ## Implemented role flow
 
@@ -130,12 +162,17 @@ Administrator operations use a unique temporary Kerberos credential cache. An
 Ansible `always` block destroys the ticket and removes its cache directory after
 both successful and failed identity-management runs.
 
-The role intentionally creates users without passwords. An administrator must
-set each initial password after deployment:
+The role reads `HPCUSER_INITIAL_PASSWORD` from the Ansible controller process
+and assigns it only when `hpcuser` is first created. The password never appears
+in task output because the validation and password tasks use `no_log: true`.
+Existing users are not modified during later idempotent runs.
+
+The example `hpcadmin` account is intentionally created without a password. If
+interactive authentication is required for that account, an administrator can
+set it after deployment:
 
 ```bash
 kinit admin
-ipa passwd hpcuser
 ipa passwd hpcadmin
 ```
 
@@ -208,16 +245,65 @@ compute nodes.
 - Leaves TCP port `3306` private to the controller; SlurmDBD will expose its
   separate accounting interface on port `6819`.
 
+### `slurm_common`
+
+- Installs the pinned Slurm base package from EPEL 9 with CRB enabled for
+  dependencies.
+- Creates the shared configuration, log, daemon-spool, and controller-state
+  directories with the required service ownership.
+- Renders `/etc/slurm/slurm.conf` on every Slurm node.
+- Derives each compute node's name, private address, CPU count, and usable
+  memory from dynamic inventory and gathered facts.
+- Configures MUNGE authentication, consumable CPU and memory scheduling,
+  SlurmDBD accounting, and the `debug` partition.
+
+### `slurmdbd`
+
+- Installs the version-matched SlurmDBD package on the controller.
+- Renders a protected `root:slurm` accounting configuration from the MariaDB
+  facts produced earlier in the controller play.
+- Starts or restarts SlurmDBD only as required by configuration changes.
+- Registers `hpc-cluster` with `sacctmgr` when it does not already exist.
+
+### `slurm_controller`
+
+- Installs the version-matched `slurmctld` package.
+- Enables and starts the controller after MariaDB and SlurmDBD are ready.
+- Restarts the service when the shared Slurm configuration changed.
+
+### `slurm_compute`
+
+- Installs the version-matched `slurmd` package on every compute node.
+- Installs root-owned executable prolog and epilog scripts.
+- Creates `/scratch/$SLURM_JOB_ID` with the submitting job's UID and GID and
+  mode `0700`, then removes only that validated numeric job directory at job
+  completion.
+- Starts or restarts `slurmd` after its configuration and scripts are ready.
+
+### `slurm_login`
+
+- Creates `/shared/examples` as `root:hpc_users` with setgid mode `2775`.
+- Installs `hostname.sbatch`, which requests up to two compute nodes, launches
+  one task per node, and writes its result under `/shared`.
+- Runs after the compute role so the example is installed only after the
+  execution partition has been configured.
+
 ### Validation
 
-`playbooks/validate.yml` performs read-only checks for scratch storage,
-cross-node MUNGE authentication, and MariaDB accounting-database access:
+`playbooks/validate.yml` currently performs read-only checks for scratch
+storage, cross-node MUNGE authentication, and MariaDB accounting-database
+access:
 
 ```bash
 ansible-playbook \
   -e "ansible_aws_ssm_bucket_name=${ANSIBLE_TRANSFER_BUCKET}" \
   playbooks/validate.yml
 ```
+
+Before using it as the deployment acceptance gate, add checks for active
+SlurmDBD, `slurmctld`, and `slurmd` services; registered compute nodes; a
+completed `/shared/examples/hostname.sbatch` submission as a FreeIPA user; the
+shared output file; and the corresponding completed `sacct` record.
 
 ## Secrets prerequisites
 

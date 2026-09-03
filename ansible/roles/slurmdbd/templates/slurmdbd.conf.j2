@@ -1,0 +1,14 @@
+AuthType=auth/munge
+
+DbdHost={{ slurm_controller_shortname }}
+DbdPort={{ slurmdbd_port }}
+SlurmUser=slurm
+
+LogFile={{ slurmdbd_log_file }}
+
+StorageType=accounting_storage/mysql
+StorageHost=localhost
+StoragePort={{ slurmdbd_database_port }}
+StorageLoc={{ mariadb_database_name }}
+StorageUser={{ mariadb_database_user }}
+StoragePass={{ mariadb_database_password }}

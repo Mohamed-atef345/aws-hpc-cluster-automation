@@ -73,7 +73,12 @@
   register: aws_cli_bin
 
 - name: Install AWS CLI v2 if not present
-  ansible.builtin.shell: "curl -fsSL https://awscli.amazonaws.com/v2/install.sh | bash"
+  ansible.builtin.shell: |
+    set -o pipefail
+    curl -fsSL https://awscli.amazonaws.com/v2/install.sh |
+      bash -s -- --system
+  args:
+    executable: /bin/bash
   when: not aws_cli_bin.stat.exists
 
 - name: Verify AWS CLI is available

@@ -1,0 +1,35 @@
+ClusterName={{ slurm_cluster_name }}
+SlurmctldHost={{ slurm_controller_host }}
+
+# Authentication
+AuthType=auth/munge
+SrunPortRange={{ srun_port_range }}
+
+# Service identity and state
+SlurmUser=slurm
+StateSaveLocation=/var/spool/slurmctld
+SlurmdSpoolDir=/var/spool/slurmd
+Prolog=/etc/slurm/prolog.sh
+Epilog=/etc/slurm/epilog.sh
+
+# Logs
+SlurmctldLogFile=/var/log/slurm/slurmctld.log
+SlurmdLogFile=/var/log/slurm/slurmd.log
+
+# Resource scheduling
+SelectType=select/cons_tres
+SelectTypeParameters=CR_Core_Memory
+
+# Accounting
+AccountingStorageType=accounting_storage/slurmdbd
+AccountingStorageHost={{ slurm_controller_host }}
+AccountingStoragePort={{ slurmdbd_port }}
+JobAcctGatherType=jobacct_gather/linux
+
+# Compute nodes
+{% for host in groups[slurm_compute_group] | sort %}
+NodeName={{ hostvars[host].ec2_tags.NodeName }} NodeAddr={{ hostvars[host].private_ip_address }} CPUs={{ hostvars[host].ansible_facts.processor_vcpus }} RealMemory={{ hostvars[host].ansible_facts.memtotal_mb | int - slurm_memory_reserve_mb | int }} State=UNKNOWN
+{% endfor %}
+
+# Partition
+PartitionName={{ slurm_partition_name }} Nodes={% for host in groups[slurm_compute_group] | sort %}{{ hostvars[host].ec2_tags.NodeName }}{% if not loop.last %},{% endif %}{% endfor %} Default=YES MaxTime=00:30:00 State=UP

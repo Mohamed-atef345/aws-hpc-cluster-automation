@@ -1,0 +1,81 @@
+name: Destroy Manually
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirmation:
+        description: Type DESTROY to confirm
+        required: true
+        type: string
+
+concurrency:
+  group: deploy-dev
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  destroy_terraform:
+    name: Destroy Terraform Infrastructure
+    runs-on: ubuntu-latest
+    environment: dev
+
+    env:
+      AWS_REGION: ${{ vars.AWS_REGION }}
+      TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+      TF_VAR_project_name: ${{ vars.TF_PROJECT_NAME }}
+      TF_VAR_owner: ${{ vars.TF_OWNER }}
+      TF_VAR_availability_zone: ${{ vars.TF_AVAILABILITY_ZONE }}
+      TF_VAR_ami_id: ${{ vars.TF_AMI_ID }}
+      TF_VAR_compute_count: ${{ vars.TF_COMPUTE_COUNT }}
+
+    steps:
+      - name: Confirm destruction
+        shell: bash
+        env:
+          CONFIRMATION: ${{ inputs.confirmation }}
+        run: |
+          if [[ "$CONFIRMATION" != "DESTROY" ]]; then
+            echo "Destruction cancelled: confirmation must be DESTROY."
+            exit 1
+          fi
+
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Authenticate to AWS
+        uses: aws-actions/configure-aws-credentials@v6.2.4
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "1.16.0"
+
+      - name: Initialize Terraform
+        run: |
+          terraform -chdir=terraform init \
+            -input=false
+
+      - name: Create destroy plan
+        run: |
+          terraform -chdir=terraform plan \
+            -destroy \
+            -input=false \
+            -out=destroy.tfplan
+
+      - name: Show destroy plan
+        run: |
+          terraform -chdir=terraform show \
+            destroy.tfplan
+
+      - name: Apply destroy plan
+        run: |
+          terraform -chdir=terraform apply \
+            -input=false \
+            -no-color \
+            destroy.tfplan

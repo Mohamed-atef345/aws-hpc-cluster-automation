@@ -67,6 +67,35 @@ resource "aws_iam_role" "github_terraform" {
   }
 }
 
+resource "aws_iam_role" "github_secrets_bootstrap" {
+  name                 = "${var.name_prefix}-github-secrets-bootstrap-role"
+  description          = "Short-lived GitHub Actions role for one-time secret value bootstrap"
+  assume_role_policy   = data.aws_iam_policy_document.github_assume_role.json
+  max_session_duration = 3600
+
+  tags = {
+    Name = "${var.name_prefix}-github-secrets-bootstrap-role"
+    Role = "secrets-bootstrap"
+  }
+}
+
+data "aws_iam_policy_document" "secrets_bootstrap" {
+  statement {
+    sid = "InitializeProjectSecretValues"
+    actions = [
+      "secretsmanager:ListSecretVersionIds",
+      "secretsmanager:PutSecretValue",
+    ]
+    resources = values(module.secrets.secret_arns)
+  }
+}
+
+resource "aws_iam_role_policy" "secrets_bootstrap" {
+  name   = "${var.name_prefix}-secrets-bootstrap"
+  role   = aws_iam_role.github_secrets_bootstrap.id
+  policy = data.aws_iam_policy_document.secrets_bootstrap.json
+}
+
 data "aws_iam_policy_document" "terraform_state" {
   statement {
     sid       = "ListStateBucket"
@@ -121,6 +150,111 @@ resource "aws_iam_role_policy" "terraform_state" {
   name   = "${var.name_prefix}-terraform-state"
   role   = aws_iam_role.github_terraform.id
   policy = data.aws_iam_policy_document.terraform_state.json
+}
+
+data "aws_iam_policy_document" "ansible_transfer" {
+  statement {
+    sid = "ManageAnsibleTransferBucket"
+    actions = [
+      "s3:CreateBucket",
+      "s3:DeleteBucket",
+      "s3:GetBucketAcl",
+      "s3:GetBucketLocation",
+      "s3:GetBucketOwnershipControls",
+      "s3:GetBucketPublicAccessBlock",
+      "s3:GetBucketTagging",
+      "s3:GetBucketVersioning",
+      "s3:GetEncryptionConfiguration",
+      "s3:GetLifecycleConfiguration",
+      "s3:ListBucket",
+      "s3:ListBucketVersions",
+      "s3:PutBucketOwnershipControls",
+      "s3:PutBucketPublicAccessBlock",
+      "s3:PutBucketTagging",
+      "s3:PutBucketVersioning",
+      "s3:PutEncryptionConfiguration",
+      "s3:PutLifecycleConfiguration",
+    ]
+    resources = [local.ansible_transfer_bucket_arn]
+  }
+
+  statement {
+    sid = "ManageAnsibleTransferObjects"
+    actions = [
+      "s3:DeleteObject",
+      "s3:DeleteObjectVersion",
+      "s3:GetObject",
+      "s3:PutObject",
+    ]
+    resources = ["${local.ansible_transfer_bucket_arn}/*"]
+  }
+}
+
+resource "aws_iam_role_policy" "ansible_transfer" {
+  name   = "${var.name_prefix}-ansible-transfer"
+  role   = aws_iam_role.github_terraform.id
+  policy = data.aws_iam_policy_document.ansible_transfer.json
+}
+
+data "aws_iam_policy_document" "session_manager" {
+  statement {
+    sid     = "StartProjectInstanceSessions"
+    actions = ["ssm:StartSession"]
+    resources = [
+      "arn:${data.aws_partition.current.partition}:ec2:${var.aws_region}:${data.aws_caller_identity.current.account_id}:instance/*",
+    ]
+
+    condition {
+      test     = "StringEquals"
+      variable = "ssm:resourceTag/Project"
+      values   = [var.name_prefix]
+    }
+
+    condition {
+      test     = "StringEquals"
+      variable = "ssm:resourceTag/ManagedBy"
+      values   = ["terraform"]
+    }
+  }
+
+  statement {
+    sid     = "UseDefaultSessionDocument"
+    actions = ["ssm:StartSession"]
+    resources = [
+      "arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:document/SSM-SessionManagerRunShell",
+    ]
+  }
+
+  statement {
+    sid = "ReadSessionManagerStatus"
+    actions = [
+      "ssm:DescribeInstanceInformation",
+      "ssm:GetConnectionStatus",
+    ]
+    resources = ["*"]
+  }
+
+  statement {
+    sid     = "OpenSessionDataChannels"
+    actions = ["ssmmessages:OpenDataChannel"]
+    resources = [
+      "arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:session/*",
+    ]
+  }
+
+  statement {
+    sid     = "TerminateSessions"
+    actions = ["ssm:TerminateSession"]
+    resources = [
+      "arn:${data.aws_partition.current.partition}:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:session/*",
+    ]
+  }
+}
+
+resource "aws_iam_role_policy" "session_manager" {
+  name   = "${var.name_prefix}-session-manager"
+  role   = aws_iam_role.github_terraform.id
+  policy = data.aws_iam_policy_document.session_manager.json
 }
 
 data "aws_iam_policy_document" "terraform_infrastructure" {

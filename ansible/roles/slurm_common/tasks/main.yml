@@ -1,0 +1,33 @@
+---
+- name: Install Slurm packages
+  ansible.builtin.dnf:
+    name: "{{ slurm_packages }}"
+    enablerepo: crb
+    state: present
+
+- name: Create root-owned Slurm directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    owner: root
+    group: root
+    mode: '0755'
+    state: directory
+  loop: "{{ slurm_directories_root }}"
+
+- name: Create slurm-owned Slurm directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    owner: slurm
+    group: slurm
+    mode: '0755'
+    state: directory
+  loop: "{{ slurm_directories_slurm }}"
+
+- name: Deploy Slurm Configuration
+  ansible.builtin.template:
+    src: slurm.conf.j2
+    dest: "{{ slurm_config_path }}"
+    owner: root
+    group: root
+    mode: '0644'
+  register: slurm_common_configuration

@@ -1,0 +1,48 @@
+---
+- name: Install Slurmdbd
+  ansible.builtin.dnf:
+    name: "{{ slurmdbd_package }}"
+    enablerepo: crb
+    state: present
+
+- name: Deploy SlurmDBD configuration
+  ansible.builtin.template:
+    src: slurmdbd.conf.j2
+    dest: "{{ slurmdbd_config_path }}"
+    owner: root
+    group: slurm
+    mode: "0640"
+  register: slurmdbd_configuration
+  no_log: true
+
+- name: Enable and start SlurmDBD
+  ansible.builtin.systemd_service:
+    name: "{{ slurmdbd_service }}"
+    state: "{{ 'restarted' if slurmdbd_configuration.changed else 'started' }}"
+    enabled: true
+
+- name: Check whether the Slurm cluster is registered
+  ansible.builtin.command:
+    argv:
+      - sacctmgr
+      - --noheader
+      - --parsable2
+      - show
+      - cluster
+      - "{{ slurm_cluster_name }}"
+      - format=Cluster
+  register: slurmdbd_cluster
+  changed_when: false
+  retries: 5
+  delay: 2
+  until: slurmdbd_cluster.rc == 0
+
+- name: Register the Slurm cluster
+  ansible.builtin.command:
+    argv:
+      - sacctmgr
+      - --immediate
+      - add
+      - cluster
+      - "{{ slurm_cluster_name }}"
+  when: slurm_cluster_name not in slurmdbd_cluster.stdout

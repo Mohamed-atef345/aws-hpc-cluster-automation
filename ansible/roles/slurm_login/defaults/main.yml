@@ -1,0 +1,3 @@
+---
+slurm_examples_directory: /shared/examples
+slurm_hostname_example: "{{ slurm_examples_directory }}/hostname.sbatch"

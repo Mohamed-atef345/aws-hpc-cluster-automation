@@ -1,0 +1,16 @@
+---
+- name: Create the shared Slurm examples directory
+  ansible.builtin.file:
+    path: "{{ slurm_examples_directory }}"
+    state: directory
+    owner: root
+    group: "{{ hpc_user_group }}"
+    mode: "2775"
+
+- name: Install the example hostname job
+  ansible.builtin.template:
+    src: hostname.sbatch.j2
+    dest: "{{ slurm_hostname_example }}"
+    owner: root
+    group: "{{ hpc_user_group }}"
+    mode: "0644"

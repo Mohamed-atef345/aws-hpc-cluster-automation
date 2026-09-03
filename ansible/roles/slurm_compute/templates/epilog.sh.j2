@@ -1,0 +1,10 @@
+#!/usr/bin/bash
+set -eu
+
+case "${SLURM_JOB_ID:-}" in
+  ''|*[!0-9]*)
+    exit 1
+    ;;
+esac
+
+/usr/bin/rm -rf -- "/scratch/$SLURM_JOB_ID"

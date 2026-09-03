@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+#SBATCH --job-name=hostname-test
+#SBATCH --partition={{ slurm_partition_name }}
+#SBATCH --nodes={{ [groups['compute'] | length, 2] | min }}
+#SBATCH --ntasks-per-node=1
+#SBATCH --time=00:02:00
+#SBATCH --output=/shared/hostname-%j.out
+
+srun hostname

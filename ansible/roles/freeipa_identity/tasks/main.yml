@@ -69,7 +69,45 @@
       changed_when: false
       loop: "{{ hpc_users_list }}"
 
-    - name: Create missing normal and admin users
+    - name: Confirm the initial hpcuser password is available when required
+      ansible.builtin.assert:
+        that:
+          - lookup('ansible.builtin.env', 'HPCUSER_INITIAL_PASSWORD') | length >= 12
+        fail_msg: >-
+          The protected GitHub environment secret HPCUSER_INITIAL_PASSWORD must
+          contain at least 12 characters before hpcuser can be created.
+      loop: "{{ ipa_user_check.results }}"
+      loop_control:
+        label: "{{ item.item.username }}"
+      when:
+        - item.item.username == 'hpcuser'
+        - item.rc != 0
+      no_log: true
+
+    - name: Create hpcuser with the protected initial password
+      ansible.builtin.command:
+        argv:
+          - ipa
+          - user-add
+          - "{{ item.item.username }}"
+          - "--first={{ item.item.first_name }}"
+          - "--last={{ item.item.last_name }}"
+          - "--homedir={{ item.item.homedir }}"
+          - "--shell={{ item.item.shell }}"
+          - --password
+        stdin: |
+          {{ lookup('ansible.builtin.env', 'HPCUSER_INITIAL_PASSWORD') }}
+          {{ lookup('ansible.builtin.env', 'HPCUSER_INITIAL_PASSWORD') }}
+        stdin_add_newline: false
+      loop: "{{ ipa_user_check.results }}"
+      loop_control:
+        label: "{{ item.item.username }}"
+      when:
+        - item.item.username == 'hpcuser'
+        - item.rc != 0
+      no_log: true
+
+    - name: Create other missing users
       ansible.builtin.command:
         argv:
           - ipa
@@ -82,7 +120,9 @@
       loop: "{{ ipa_user_check.results }}"
       loop_control:
         label: "{{ item.item.username }}"
-      when: item.rc != 0
+      when:
+        - item.item.username != 'hpcuser'
+        - item.rc != 0
 
     - name: Add users to their assigned FreeIPA groups
       ansible.builtin.command:
@@ -92,7 +132,9 @@
           - "{{ item.1 }}"
           - "--users={{ item.0.username }}"
       loop: "{{ hpc_users_list | subelements('groups') }}"
-      changed_when: true
+      register: hpc_group_membership_result
+      changed_when: >-
+        'Number of members added 1' in hpc_group_membership_result.stdout
 
     - name: Check if the HPC administrators sudo rule exists
       ansible.builtin.command:

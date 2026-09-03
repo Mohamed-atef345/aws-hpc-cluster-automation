@@ -1,0 +1,6 @@
+---
+slurmdbd_package: "slurm-slurmdbd-{{ slurm_package_version }}"
+slurmdbd_config_path: /etc/slurm/slurmdbd.conf
+slurmdbd_service: slurmdbd
+slurmdbd_log_file: /var/log/slurm/slurmdbd.log
+slurmdbd_database_port: 3306

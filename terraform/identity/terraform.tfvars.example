@@ -4,7 +4,7 @@ owner       = "mohamed-atef"
 
 # Replace this with the exact sub claim emitted for your repository and the
 # protected GitHub environment named dev. Never use a wildcard here.
-github_oidc_subject = "repo:Mohamed-atef345/REPOSITORY_NAME:environment:dev"
+github_oidc_subject = "repo:Mohamed-atef345@148637608/aws-hpc-cluster-automation@1344863857:environment:dev"
 
 state_bucket_name  = "terraform-backend-bucket-017777088168-us-east-1-an"
 state_key          = "slurm-cluster-freeipa/dev/terraform.tfstate"

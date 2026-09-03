@@ -1,0 +1,100 @@
+name: CI
+on:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  detect-changed-files:
+    runs-on: ubuntu-latest
+    outputs:
+      terraform: ${{ steps.changes.outputs.terraform }}
+      ansible: ${{ steps.changes.outputs.ansible }}
+      docs: ${{ steps.changes.outputs.docs }}
+    steps:
+      - name: Getting Code
+        uses: actions/checkout@v7
+      - name: Detect Changed Files
+        uses: dorny/paths-filter@v4
+        id: changes
+        with:
+          filters: |
+            terraform:
+              - 'terraform/**'
+            ansible:
+              - 'ansible/**'
+
+  terraform:
+    needs: detect-changed-files
+    runs-on: ubuntu-latest
+    if: ${{ needs.detect-changed-files.outputs.terraform == 'true' }}
+
+    steps:
+      - name: Getting Code
+        uses: actions/checkout@v7
+
+      - name: Install Terraform
+        uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_version: "1.16.0"
+      - name: Check formatting
+        run: terraform fmt -check -recursive terraform
+
+      - name: Initialize disposable root
+        run: terraform -chdir=terraform init -backend=false -input=false
+
+      - name: Validate disposable root
+        run: terraform -chdir=terraform validate -no-color
+
+      - name: Initialize identity root
+        run: terraform -chdir=terraform/identity init -backend=false -input=false
+
+      - name: Validate identity root
+        run: terraform -chdir=terraform/identity validate -no-color
+
+  ansible:
+    name: Ansible
+    needs: detect-changed-files
+    runs-on: ubuntu-latest
+    if: ${{ needs.detect-changed-files.outputs.ansible == 'true' }}
+
+    steps:
+          - name: Check out repository
+            uses: actions/checkout@v7
+
+          - name: Install Python v3.13
+            uses: actions/setup-python@v6
+            with:
+              python-version: "3.13"
+
+          - name: Install Ansible dependencies
+            run: |
+              python -m pip install --upgrade pip
+              python -m pip install ansible-core ansible-lint -r ansible/requirements.txt
+              ansible-galaxy collection install -r ansible/requirements.yml
+
+          - name: Run Ansible lint
+            working-directory: ansible
+            run: ansible-lint .
+
+          - name: Check site playbook syntax
+            working-directory: ansible
+            env:
+              ANSIBLE_INVENTORY_ENABLED: host_list,auto,yaml
+            run: ansible-playbook -i localhost, --syntax-check playbooks/site.yml
+
+          - name: Check validation playbook syntax
+            working-directory: ansible
+            env:
+              ANSIBLE_INVENTORY_ENABLED: host_list,auto,yaml
+            run: ansible-playbook -i localhost, --syntax-check playbooks/validate.yml
+      

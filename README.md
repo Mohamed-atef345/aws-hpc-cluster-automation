@@ -18,9 +18,10 @@ HPC patterns without the cost of a large permanent cluster.
 - Shared `/home` and `/shared` filesystems backed by encrypted Amazon EFS
 - Encrypted gp3 scratch storage mounted independently on each compute node
 - Shared MUNGE authentication with key material delivered from Secrets Manager
-- Controller-local MariaDB prepared for SlurmDBD accounting
+- Slurm controller, compute daemons, login client, and per-job scratch lifecycle
+- SlurmDBD accounting backed by controller-local MariaDB
 - Separate persistent and disposable Terraform state boundaries
-- Least-privilege IAM and an OIDC-ready GitHub Actions deployment model
+- Role-separated IAM and an OIDC trust model for GitHub Actions
 
 ## Technology stack
 
@@ -225,8 +226,11 @@ The main playbook deliberately configures dependencies before their consumers:
 3. Enroll controller, login, and compute nodes as FreeIPA clients.
 4. Mount the EFS access points and prepare compute-local scratch storage.
 5. Install the shared MUNGE trust domain on all Slurm nodes.
-6. Prepare MariaDB before starting SlurmDBD and `slurmctld` on the controller.
-7. Configure Slurm client tools on the login node and `slurmd` on compute nodes.
+6. Install the shared Slurm packages and inventory-derived `slurm.conf` on all
+   Slurm nodes.
+7. Prepare MariaDB, then start SlurmDBD and `slurmctld` on the controller.
+8. Install the prolog and epilog scripts, then start `slurmd` on compute nodes.
+9. Install the login-node example job after the compute partition is configured.
 
 This sequencing prevents Slurm services from starting before DNS, identity,
 clock synchronization, shared authentication, and accounting storage are ready.
@@ -304,12 +308,31 @@ privileges only on that database. Administrative operations use MariaDB's local
 Unix socket; no database-root password or remote database administration path
 is introduced.
 
+### Slurm scheduling and accounting
+
+The shared Slurm role installs the pinned EPEL 9 package release, creates the
+controller and daemon state directories, and renders one `slurm.conf` from the
+dynamic EC2 inventory. Compute CPU counts, private addresses, and usable memory
+are derived from gathered host facts rather than duplicated in static files.
+
+On `ctl01`, SlurmDBD connects to the local MariaDB database, registers the
+cluster with `sacctmgr`, and starts before `slurmctld`. Compute nodes install a
+prolog that creates `/scratch/$SLURM_JOB_ID` for the submitting UID and GID and
+an epilog that removes only that validated numeric job directory. The login
+role installs `/shared/examples/hostname.sbatch`; it runs after the compute role
+so its example targets an already configured partition.
+
+These roles are implemented and pass local parsing and template-rendering
+checks. Their service startup, node registration, job execution, and accounting
+path have not yet been proven on deployed Rocky Linux instances.
+
 ## Secret handling
 
 Terraform creates secret containers but never stores secret values in state.
-FreeIPA credentials, the MUNGE key, and MariaDB credentials are populated
-outside Terraform and retrieved locally by the authorized EC2 instance role.
-Sensitive Ansible operations suppress their output with `no_log`.
+The protected deployment workflow generates the FreeIPA administrator,
+Directory Manager, MUNGE, and MariaDB values. Its dedicated bootstrap role
+writes them directly to AWS Secrets Manager. Authorized EC2 roles retrieve them
+locally, and sensitive Ansible operations suppress output with `no_log`.
 
 Required Secrets Manager names:
 
@@ -342,8 +365,92 @@ Secret access is limited by node role:
 | Login      | MUNGE key                                |
 | Compute    | MUNGE key                                |
 
+The GitHub secret-bootstrap role may list versions and add values to these
+three containers, but it cannot retrieve their contents. The normal deployment
+role cannot read or change them.
+
 The expected JSON schemas and rotation considerations are documented in
 [`ansible/README.md`](ansible/README.md).
+
+### Credentials an operator may need
+
+Only the human login credential `HPCUSER_INITIAL_PASSWORD` is supplied as a
+protected GitHub environment secret. It is never passed to Terraform or written
+to Terraform state.
+
+| Value                         | Human use                                                        |
+| ----------------------------- | ---------------------------------------------------------------- |
+| FreeIPA `admin_password`      | Generated automatically; retrieve only for administration         |
+| Directory Manager password    | Emergency low-level LDAP administration; not used routinely      |
+| MariaDB application password  | Used only by MariaDB and SlurmDBD                                |
+| MUNGE key                     | Machine authentication material; never used as a login password  |
+| `hpcuser` initial password    | Supplied by GitHub and assigned only when `hpcuser` is created    |
+
+To display the FreeIPA administrator password, use an authorized administrator
+session in a private terminal, not a workflow log:
+
+```bash
+aws secretsmanager get-secret-value \
+  --secret-id HPCSlurmFreeIPA/freeipa/credentials \
+  --region us-east-1 \
+  --query SecretString \
+  --output text \
+| jq -r '.admin_password'
+```
+
+The `hpcuser` password is separate from the FreeIPA administrator credential.
+The workflow exposes `HPCUSER_INITIAL_PASSWORD` only to the Ansible step, and
+the identity role assigns it only when it creates `hpcuser`. Existing users are
+not modified on later idempotent runs. The initial password is temporary under
+the default FreeIPA policy, so `hpcuser` must change it at first authentication.
+
+The example `hpcadmin` account is created without a password. If interactive
+login is required for that account, start a Session Manager session on `ipa01`,
+obtain an administrator Kerberos ticket, and set its password manually:
+
+```bash
+IPA_INSTANCE_ID="$(
+  aws ec2 describe-instances \
+    --region us-east-1 \
+    --filters \
+      Name=tag:Project,Values=HPCSlurmFreeIPA \
+      Name=tag:NodeName,Values=ipa01 \
+      Name=instance-state-name,Values=running \
+    --query 'Reservations[0].Instances[0].InstanceId' \
+    --output text
+)"
+
+aws ssm start-session --region us-east-1 --target "$IPA_INSTANCE_ID"
+```
+
+On `ipa01`:
+
+```bash
+sudo -i
+aws secretsmanager get-secret-value \
+  --secret-id HPCSlurmFreeIPA/freeipa/credentials \
+  --region us-east-1 \
+  --query SecretString \
+  --output text \
+| jq -r '.admin_password' \
+| kinit admin
+
+ipa passwd hpcadmin
+kdestroy
+```
+
+The workflow passes the login password through a step-scoped environment
+variable:
+
+```yaml
+- name: Configure The Cluster
+  env:
+    HPCUSER_INITIAL_PASSWORD: ${{ secrets.HPCUSER_INITIAL_PASSWORD }}
+```
+
+Do not copy the generated FreeIPA administrator, Directory Manager, MUNGE, or
+MariaDB values into GitHub. They are service credentials generated by the
+bootstrap step and consumed directly from AWS Secrets Manager.
 
 ## Repository layout
 
@@ -367,88 +474,142 @@ Supporting documentation:
 - [Persistent identity stack](terraform/identity/README.md)
 - [Ansible configuration](ansible/README.md)
 
-## Deployment
+## Project setup and lifecycle
+
+The project uses a one-time administrative bootstrap followed by automated
+delivery. An administrator applies only `terraform/identity`; GitHub Actions
+then owns the disposable infrastructure, secret initialization, Ansible
+configuration, validation, and routine teardown.
 
 ### Prerequisites
 
 - Terraform `>= 1.10.0, < 2.0.0`
-- AWS provider `~> 6.61`
-- Ansible Core and the collections declared under `ansible/`
-- AWS CLI and the Session Manager plugin
+- AWS CLI authenticated with administrator permissions for the bootstrap
 - An encrypted S3 backend and an existing GitHub Actions OIDC provider
 - Access to `us-east-1` with sufficient EC2, EBS, EFS, and VPC quotas
+- Permission to configure repository environments, variables, secrets, and
+  branch protection in GitHub
 
-### 1. Provision persistent identity resources
+### 1. Verify the bootstrap prerequisites
+
+Clone the repository and verify the local tools and AWS identity:
+
+```bash
+git clone git@github.com:Mohamed-atef345/aws-hpc-cluster-automation.git
+cd aws-hpc-cluster-automation
+
+terraform version
+aws --version
+aws sts get-caller-identity --region us-east-1
+```
+
+The identity root depends on two account-level resources that it intentionally
+does not manage. Confirm that both already exist:
+
+```bash
+aws s3api head-bucket \
+  --bucket terraform-backend-bucket-017777088168-us-east-1-an
+
+AWS_ACCOUNT_ID="$(
+  aws sts get-caller-identity --query Account --output text
+)"
+aws iam get-open-id-connect-provider \
+  --open-id-connect-provider-arn \
+  "arn:aws:iam::${AWS_ACCOUNT_ID}:oidc-provider/token.actions.githubusercontent.com"
+```
+
+Both commands must succeed. If the repository is forked, transferred, or
+renamed, update `github_oidc_subject` to the exact subject issued for the new
+repository before continuing.
+
+### 2. Apply the persistent identity root
+
+Create the local variable file once, review every value, and keep the exact
+repository subject and `name_prefix` consistent with the workflow variables:
 
 ```bash
 cp terraform/identity/terraform.tfvars.example terraform/identity/terraform.tfvars
-terraform -chdir=terraform/identity init -reconfigure
+
 terraform -chdir=terraform/identity fmt -check -recursive
+terraform -chdir=terraform/identity init -reconfigure -input=false
 terraform -chdir=terraform/identity validate
-terraform -chdir=terraform/identity plan -out=identity.tfplan
-terraform -chdir=terraform/identity apply identity.tfplan
+terraform -chdir=terraform/identity plan \
+  -input=false \
+  -lock-timeout=5m \
+  -out=identity.tfplan
+terraform -chdir=terraform/identity show -no-color identity.tfplan
+terraform -chdir=terraform/identity apply -input=false identity.tfplan
 ```
 
-Populate the three Secrets Manager containers after this step. Never place
-plaintext credentials in Terraform variables, `.tfvars`, workflow YAML, or Git.
-
-### 2. Provision the disposable cluster
+This creates the EC2 roles and profiles, the three empty Secrets Manager
+containers, the GitHub deployment role, and the dedicated secret-bootstrap
+role. Record the two workflow role outputs:
 
 ```bash
-cp terraform/terraform.tfvars.example terraform/terraform.tfvars
-terraform -chdir=terraform init -reconfigure
-terraform -chdir=terraform fmt -check -recursive
-terraform -chdir=terraform validate
-terraform -chdir=terraform plan -out=cluster.tfplan
-terraform -chdir=terraform apply cluster.tfplan
+terraform -chdir=terraform/identity output -raw github_terraform_role_arn
+terraform -chdir=terraform/identity output -raw github_secrets_bootstrap_role_arn
 ```
 
-### 3. Confirm private-node management
-
-Wait until all five instances are registered with Systems Manager before
-running Ansible:
+Finally, confirm that the applied root has no pending changes. Exit code `0`
+means the bootstrap is consistent; exit code `2` means the displayed changes
+must be reviewed:
 
 ```bash
-aws ssm describe-instance-information \
-  --region us-east-1 \
-  --query 'InstanceInformationList[*].[InstanceId,PingStatus,PlatformName]' \
-  --output table
+terraform -chdir=terraform/identity plan \
+  -detailed-exitcode \
+  -input=false \
+  -lock-timeout=5m
 ```
 
-Each expected node must report `Online`. This is the management-plane readiness
-gate for a cluster with no SSH entry point.
+### 3. Configure the protected GitHub environment
 
-### 4. Configure the nodes
+In the repository, open **Settings → Environments**, create an environment named
+`dev`, restrict deployment branches to protected branches, and add a required
+reviewer if the repository plan supports it. The workflow environment name must
+remain `dev` because it is part of the AWS OIDC trust subject.
 
-Install the Ansible dependencies and obtain the Terraform outputs required by
-the SSM connection and EFS roles:
+Add these environment variables under **Environment variables**:
+
+| Variable                         | Required value                                                     |
+| -------------------------------- | ------------------------------------------------------------------ |
+| `AWS_DEPLOY_ROLE_ARN`            | Terraform output `github_terraform_role_arn`                       |
+| `AWS_SECRETS_BOOTSTRAP_ROLE_ARN` | Terraform output `github_secrets_bootstrap_role_arn`               |
+| `AWS_REGION`                     | `us-east-1`                                                        |
+| `TF_PROJECT_NAME`                | `HPCSlurmFreeIPA`                                                  |
+| `TF_OWNER`                       | `mohamed-atef`                                                     |
+| `TF_AVAILABILITY_ZONE`           | `us-east-1a`                                                       |
+| `TF_AMI_ID`                      | The pinned Rocky Linux 9 AMI ID, currently `ami-07f1ef003bc5de2b1` |
+| `TF_COMPUTE_COUNT`               | `2`                                                                |
+
+Add this environment secret under **Environment secrets**:
+
+| Secret                     | Purpose                                                        |
+| -------------------------- | -------------------------------------------------------------- |
+| `HPCUSER_INITIAL_PASSWORD` | Initial FreeIPA password assigned when `hpcuser` is first made |
+
+Choose a strong value of at least 12 characters without line breaks. Do not add
+AWS access keys, the FreeIPA administrator password, the Directory Manager
+password, the MUNGE key, or MariaDB credentials to GitHub. The workflow
+generates those service values and stores them directly in AWS Secrets Manager.
+
+If a password manager is not generating the value, create one locally and save
+it before adding it to the GitHub environment:
 
 ```bash
-python3 -m pip install -r ansible/requirements.txt
-ansible-galaxy collection install -r ansible/requirements.yml
-
-ANSIBLE_TRANSFER_BUCKET="$(
-  terraform -chdir=terraform output -raw ansible_transfer_bucket_name
-)"
-EFS_FILE_SYSTEM_ID="$(
-  terraform -chdir=terraform output -raw efs_file_system_id
-)"
-EFS_HOME_ACCESS_POINT_ID="$(
-  terraform -chdir=terraform output -raw efs_home_access_point_id
-)"
-EFS_SHARED_ACCESS_POINT_ID="$(
-  terraform -chdir=terraform output -raw efs_shared_access_point_id
-)"
-
-cd ansible
-ansible-inventory --graph
-ansible-playbook \
-  -e "ansible_aws_ssm_bucket_name=${ANSIBLE_TRANSFER_BUCKET}" \
-  -e "efs_file_system_id=${EFS_FILE_SYSTEM_ID}" \
-  -e "efs_home_access_point_id=${EFS_HOME_ACCESS_POINT_ID}" \
-  -e "efs_shared_access_point_id=${EFS_SHARED_ACCESS_POINT_ID}" \
-  playbooks/site.yml
+openssl rand -base64 24
 ```
+
+Protect `main`, require pull requests, and require the Terraform and Ansible CI
+checks before merging. The three workflow files must be committed to `main`
+before the manual deployment controls appear in GitHub Actions.
+
+### 4. Hand off to the pipeline
+
+Open **Actions → Deploy Manually → Run workflow** and select `main`. No local
+Terraform or Ansible deployment command is required after the identity
+bootstrap. The workflow applies the disposable Terraform root, initializes
+missing AWS secret values, waits for SSM connectivity, configures the nodes with
+Ansible, and runs the validation playbook.
 
 ## Validation
 
@@ -463,6 +624,7 @@ service checks:
 | Scratch storage | Active XFS mount, UUID persistence, and mode `1777` | Compute-local storage is safe and survives reboot                  |
 | MUNGE           | Controller token decoded across Slurm nodes         | Nodes share the key and can authenticate credentials               |
 | MariaDB         | Application login and loopback binding              | SlurmDBD credentials work without exposing port 3306               |
+| Slurm runtime   | Services, nodes, test job, output, and `sacct`       | Scheduling and accounting work end to end                           |
 
 Run the static checks before provisioning or submitting a pull request:
 
@@ -473,12 +635,17 @@ terraform -chdir=terraform/identity fmt -check -recursive
 terraform -chdir=terraform/identity validate
 
 cd ansible
-ansible-playbook --syntax-check playbooks/site.yml
-ansible-playbook --syntax-check playbooks/validate.yml
+ANSIBLE_INVENTORY_ENABLED=host_list,auto,yaml \
+  ansible-playbook -i localhost, --syntax-check playbooks/site.yml
+ANSIBLE_INVENTORY_ENABLED=host_list,auto,yaml \
+  ansible-playbook -i localhost, --syntax-check playbooks/validate.yml
 ```
 
-After deployment, the read-only validation playbook checks compute scratch
-storage, cross-node MUNGE authentication, and MariaDB access:
+The explicit localhost inventory keeps static CI independent of AWS. It is
+only for parsing; deployment uses `inventory/cluster.aws_ec2.yml`.
+
+After deployment, the current read-only validation playbook checks compute
+scratch storage, cross-node MUNGE authentication, and MariaDB access:
 
 ```bash
 ansible-playbook \
@@ -489,9 +656,10 @@ ansible-playbook \
 Run `site.yml` twice after the initial deployment. The second run should report
 no changes for stable resources.
 
-When the Slurm roles are complete, runtime acceptance will additionally verify
-that both compute nodes reach `IDLE`, a FreeIPA user can complete a multi-node
-job, and `sacct` returns the persisted accounting record.
+Before deployment automation is considered complete, extend runtime acceptance
+to verify that SlurmDBD, `slurmctld`, and every `slurmd` are active; both compute
+nodes register; a FreeIPA user completes the example job; the expected output
+is written to `/shared`; and `sacct` returns its completed accounting record.
 
 ## CI/CD design
 
@@ -501,21 +669,122 @@ through short-lived AWS OIDC credentials:
 | Workflow responsibility  | Trigger                     | Stages                                                                                    |
 | ------------------------ | --------------------------- | ----------------------------------------------------------------------------------------- |
 | Continuous integration   | Pull request and push       | Terraform formatting/validation, Ansible syntax, and linting                              |
-| Reviewed deployment      | Manual environment approval | OIDC login, identity apply, cluster apply, SSM readiness, Ansible, and runtime validation |
+| Reviewed deployment      | Manual environment approval | OIDC login, cluster apply, SSM readiness, Ansible, and runtime validation                 |
 | Cost-controlled teardown | Manual environment approval | Destroy the disposable Terraform root while preserving identity resources                 |
 
-The IAM trust policy restricts role assumption to the configured repository
-subject and the `sts.amazonaws.com` audience. Workflow files remain a delivery
-integration task; the infrastructure is already divided so deployment and
-teardown can use different approval and permission boundaries.
+The persistent identity root is a bootstrap stack and is applied separately by
+an administrator; a workflow cannot assume the deployment role before that
+role exists. The IAM trust policy restricts later role assumption to the
+configured repository subject and the `sts.amazonaws.com` audience.
+
+Always review the persistent-root plan manually. A change to `name_prefix`
+changes IAM role and secret names and can force replacement of those resources;
+the deployment and teardown workflows must therefore never apply this root.
+
+The deployment role can manage the deterministic disposable S3 transfer bucket,
+transfer Ansible modules through it, inspect SSM readiness, and open and close
+sessions only to Terraform-managed project instances. It does not read the
+cluster's application secrets; the EC2 instance roles retrieve those values.
+
+The complete environment-variable and secret inventory is defined in the
+project setup section. `TF_PROJECT_NAME` must equal the identity stack's
+`name_prefix`, because that value is used in EC2 tags and in the
+transfer-bucket policy. The workflow maps those variables into Terraform as
+follows:
+
+```yaml
+env:
+  AWS_REGION: ${{ vars.AWS_REGION }}
+  TF_VAR_aws_region: ${{ vars.AWS_REGION }}
+  TF_VAR_project_name: ${{ vars.TF_PROJECT_NAME }}
+  TF_VAR_owner: ${{ vars.TF_OWNER }}
+  TF_VAR_availability_zone: ${{ vars.TF_AVAILABILITY_ZONE }}
+  TF_VAR_ami_id: ${{ vars.TF_AMI_ID }}
+  TF_VAR_compute_count: ${{ vars.TF_COMPUTE_COUNT }}
+```
+
+The workflow job must use the protected `dev` environment and request an OIDC
+token before configuring AWS credentials:
+
+```yaml
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - uses: actions/checkout@v6
+      - name: Authenticate to AWS with OIDC
+        uses: aws-actions/configure-aws-credentials@v6.2.3
+        with:
+          role-to-assume: ${{ vars.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+      - run: aws sts get-caller-identity
+```
+
+The identity stack must trust this exact subject:
+
+```text
+repo:Mohamed-atef345@148637608/aws-hpc-cluster-automation@1344863857:environment:dev
+```
+
+The numeric owner and repository IDs are required because this repository was
+created after GitHub's July 15, 2026 immutable-subject cutoff.
+
+Do not store AWS access keys or the FreeIPA, MUNGE, and MariaDB values in
+GitHub. OIDC supplies temporary AWS credentials, and the application values
+remain in Secrets Manager.
+
+The deployment pipeline order is:
+
+1. Check out the repository and configure Terraform and Python.
+2. Assume `AWS_DEPLOY_ROLE_ARN` through OIDC with `id-token: write`.
+3. Install Ansible requirements, collections, and the Session Manager plugin.
+4. Initialize, plan, and apply only the disposable `terraform/` root.
+5. Read the transfer-bucket and EFS IDs from Terraform outputs.
+6. Assume `AWS_SECRETS_BOOTSTRAP_ROLE_ARN` and initialize only secrets without
+   an `AWSCURRENT` version.
+7. Re-assume `AWS_DEPLOY_ROLE_ARN` in the Ansible job.
+8. Wait for the inventory hosts to accept SSM connections.
+9. Verify the dynamic inventory and run `ansible/playbooks/site.yml`.
+10. Run `ansible/playbooks/validate.yml` and the completed Slurm acceptance test.
+
+After Terraform apply, export the four generated Ansible inputs inside the
+deployment job:
+
+```bash
+echo "ANSIBLE_TRANSFER_BUCKET=$(terraform -chdir=terraform output -raw ansible_transfer_bucket_name)" >> "$GITHUB_ENV"
+echo "EFS_FILE_SYSTEM_ID=$(terraform -chdir=terraform output -raw efs_file_system_id)" >> "$GITHUB_ENV"
+echo "EFS_HOME_ACCESS_POINT_ID=$(terraform -chdir=terraform output -raw efs_home_access_point_id)" >> "$GITHUB_ENV"
+echo "EFS_SHARED_ACCESS_POINT_ID=$(terraform -chdir=terraform output -raw efs_shared_access_point_id)" >> "$GITHUB_ENV"
+```
+
+Pass them to both Ansible playbook runs exactly as shown in the deployment
+section above. They are deployment outputs, not GitHub configuration variables.
+
+The teardown workflow assumes the same role, initializes the disposable root,
+creates a reviewed destroy plan, and applies it. It must never destroy
+`terraform/identity`.
 
 ## Current project state
 
-Terraform infrastructure and the Ansible roles for the base operating system,
-FreeIPA, centralized identities, EFS, compute scratch, MUNGE, and MariaDB are
-implemented and pass local syntax validation. SlurmDBD and the Slurm controller,
-login, and compute roles remain in development. Runtime validation against the
-deployed AWS environment is still pending.
+Terraform infrastructure and all planned Ansible roles, including SlurmDBD,
+the controller, compute, and login roles, are implemented. Both Terraform roots
+pass formatting and validation, both playbooks pass Ansible syntax checking,
+the Slurm shell templates pass `bash -n`, and representative Slurm configuration
+templates render successfully.
+
+Static CI is implemented for Terraform formatting and validation and for
+Ansible linting and syntax checks. Before treating deployment CD as complete,
+add the Slurm service, node, submitted-job, shared-output, and accounting checks
+described above to runtime acceptance.
+
+Runtime validation against deployed AWS instances is still pending, so static
+checks alone cannot guarantee that package installation and service startup
+will have no environment-specific errors.
 
 The intended end-to-end acceptance test is a FreeIPA user submitting a
 multi-node job from `login01`, executing across both compute nodes, writing
@@ -524,15 +793,73 @@ output to `/shared`, and retrieving the completed accounting record with
 
 ## Teardown and cost control
 
-Destroy the disposable root when the lab is not in use:
+### Routine infrastructure cleanup
+
+Destroy the disposable cluster whenever the lab is not in use. The manual
+workflow requires an explicit confirmation and destroys only the `terraform/`
+root:
+
+1. Open **Actions → Destroy Manually → Run workflow**.
+2. Select `main` and enter `DESTROY` in the confirmation field.
+3. Review the destroy plan in the job log before the apply step completes.
+
+To perform the same cleanup locally, run these commands from the repository
+root with the same Terraform variable values used during deployment:
 
 ```bash
-terraform -chdir=terraform plan -destroy -out=destroy.tfplan
-terraform -chdir=terraform apply destroy.tfplan
+terraform -chdir=terraform init -reconfigure -input=false
+terraform -chdir=terraform plan \
+  -destroy \
+  -input=false \
+  -lock-timeout=5m \
+  -out=destroy.tfplan
+terraform -chdir=terraform show -no-color destroy.tfplan
+terraform -chdir=terraform apply -input=false destroy.tfplan
 ```
 
 The disposable teardown removes the VPC, NAT gateway, EC2 instances, EFS, and
-EBS volumes. The persistent identity root and Terraform backend remain.
+EBS volumes. It preserves the IAM roles, instance profiles, Secrets Manager
+containers, GitHub OIDC provider, and Terraform backend. Confirm that the
+disposable root no longer manages any resources:
+
+```bash
+terraform -chdir=terraform state list
+```
+
+No output is expected.
+
+### Permanently remove pipeline identities and secrets
+
+Only when permanently removing the entire project, destroy the persistent
+identity stack afterward with administrator credentials. Do this only after
+the disposable root is empty so no EC2 instance is using an instance profile:
+
+```bash
+terraform -chdir=terraform/identity init -reconfigure -input=false
+terraform -chdir=terraform/identity plan \
+  -destroy \
+  -input=false \
+  -lock-timeout=5m \
+  -out=identity-destroy.tfplan
+terraform -chdir=terraform/identity show -no-color identity-destroy.tfplan
+terraform -chdir=terraform/identity apply -input=false identity-destroy.tfplan
+terraform -chdir=terraform/identity state list
+```
+
+This permanently deletes the three Secrets Manager containers and their values
+because their recovery window is zero. It also removes both GitHub workflow
+roles, the four EC2 roles and instance profiles, and their policies. It must
+never run in the routine teardown workflow. The shared account-level GitHub
+OIDC provider and S3 backend are retained because this root only references
+them.
+
+If the project is permanently retired, remove the now-stale GitHub environment
+variables `AWS_DEPLOY_ROLE_ARN` and `AWS_SECRETS_BOOTSTRAP_ROLE_ARN` from
+**Settings → Environments → dev**.
+
+The remaining `TF_*` and `AWS_REGION` variables are harmless configuration and
+may be retained for a later rebuild or removed from the `dev` environment in
+the same way.
 
 The primary cost drivers are NAT gateway uptime, EC2 running hours, EBS
 storage, EFS data, and Secrets Manager containers. Stopping EC2 instances does

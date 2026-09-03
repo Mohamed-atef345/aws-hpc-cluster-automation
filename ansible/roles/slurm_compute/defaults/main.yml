@@ -1,0 +1,7 @@
+---
+slurm_compute_package: "slurm-slurmd-{{ slurm_package_version }}"
+slurm_compute_scripts:
+  - source: prolog.sh.j2
+    destination: /etc/slurm/prolog.sh
+  - source: epilog.sh.j2
+    destination: /etc/slurm/epilog.sh

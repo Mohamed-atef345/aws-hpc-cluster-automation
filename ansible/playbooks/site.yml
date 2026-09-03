@@ -34,6 +34,12 @@
   roles:
     - munge
 
+- name: Configure common Slurm components
+  hosts: slurm_nodes
+  become: true
+  roles:
+    - slurm_common
+
 - name: Configure Slurm controller and accounting
   hosts: controller
   become: true
@@ -42,14 +48,14 @@
     - slurmdbd
     - slurm_controller
 
-- name: Configure login nodes
-  hosts: login
-  become: true
-  roles:
-    - slurm_login
-
 - name: Configure compute nodes
   hosts: compute
   become: true
   roles:
     - slurm_compute
+
+- name: Configure login nodes
+  hosts: login
+  become: true
+  roles:
+    - slurm_login

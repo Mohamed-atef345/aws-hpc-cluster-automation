@@ -1,0 +1,15 @@
+#!/usr/bin/bash
+set -eu
+
+case "${SLURM_JOB_ID:-}" in
+  ''|*[!0-9]*)
+    exit 1
+    ;;
+esac
+
+/usr/bin/install \
+  -d \
+  -m 0700 \
+  -o "$SLURM_JOB_UID" \
+  -g "$SLURM_JOB_GID" \
+  "/scratch/$SLURM_JOB_ID"
