@@ -22,8 +22,13 @@ freeipa_directory_server_path: >-
 freeipa_pki_server_instance: pki-tomcat
 freeipa_pki_server_path: /etc/pki/pki-tomcat
 freeipa_partial_install_artifacts:
-  - /root/.dogtag/pki-tomcat
+  - /root/.dogtag
   - /root/.ipa_cache
   - /root/ca-agent.p12
   - /root/cacert.p12
   - /root/ipa.csr
+  - /etc/pki/pki-tomcat
+  - /var/lib/pki/pki-tomcat
+  - /var/log/pki/pki-tomcat
+  - /etc/sysconfig/pki/tomcat/pki-tomcat
+  - /etc/sysconfig/pki-tomcat

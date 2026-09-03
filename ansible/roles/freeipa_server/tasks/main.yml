@@ -234,7 +234,18 @@
     - /var/lib/ipa-client
     - /var/lib/ipa-client/sysrestore
     - /var/log/ipa
+  when: freeipa_server_configured.rc != 0
+
+- name: Ensure PKI directories exist with proper pkiuser ownership
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: pkiuser
+    group: pkiuser
+    mode: "0775"
+  loop:
     - /var/log/pki
+    - /var/lib/pki
   when: freeipa_server_configured.rc != 0
 
 - name: Ensure FreeIPA state files exist
@@ -312,6 +323,38 @@
   when:
     - freeipa_install_log is not skipped
     - freeipa_install_log.stdout_lines is defined
+
+- name: Find PKI logs on failure
+  ansible.builtin.find:
+    paths: /var/log/pki
+    file_type: file
+    recurse: true
+  register: freeipa_pki_log_files
+  when:
+    - freeipa_server_configured.rc != 0
+    - freeipa_install_result.rc | default(0) != 0
+
+- name: Read PKI logs on failure
+  ansible.builtin.command: "tail -n 80 {{ item.path }}"
+  loop: "{{ freeipa_pki_log_files.files | default([]) }}"
+  register: freeipa_pki_logs_content
+  changed_when: false
+  failed_when: false
+  when:
+    - freeipa_server_configured.rc != 0
+    - freeipa_install_result.rc | default(0) != 0
+
+- name: Display PKI failure logs
+  ansible.builtin.debug:
+    msg:
+      logfile: "{{ item.item.path }}"
+      content: "{{ item.stdout_lines }}"
+  loop: "{{ freeipa_pki_logs_content.results | default([]) }}"
+  when:
+    - freeipa_server_configured.rc != 0
+    - freeipa_install_result.rc | default(0) != 0
+    - item.stdout_lines is defined
+    - item.stdout_lines | length > 0
 
 - name: Fail if FreeIPA installation failed
   ansible.builtin.fail:
