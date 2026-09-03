@@ -119,6 +119,28 @@
     - freeipa_server_configured.rc != 0
     - freeipa_server_state.stat.exists | default(false)
 
+- name: Stop services left running by an incomplete FreeIPA installation
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: false
+    state: stopped
+  loop: "{{ freeipa_partial_install_services }}"
+  when:
+    - freeipa_server_configured.rc != 0
+    - freeipa_server_state.stat.exists | default(false)
+
+- name: Wait for LDAP ports to be released after cleanup
+  ansible.builtin.wait_for:
+    port: "{{ item }}"
+    state: stopped
+    timeout: 60
+  loop:
+    - 389
+    - 636
+  when:
+    - freeipa_server_configured.rc != 0
+    - freeipa_server_state.stat.exists | default(false)
+
 - name: Install the FreeIPA server non-interactively
   ansible.builtin.shell: |
     set -euo pipefail
@@ -154,7 +176,6 @@
     executable: /bin/bash
   when: freeipa_server_configured.rc != 0
   changed_when: true
-  no_log: true
 
 - name: Enable and start the FreeIPA service
   ansible.builtin.systemd_service:
