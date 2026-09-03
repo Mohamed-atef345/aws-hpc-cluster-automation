@@ -40,9 +40,14 @@ terraform plan
 The role contains the permissions required by the deployment workflow:
 
 - The transfer-bucket policy is restricted to the deterministic bucket derived
-  from `name_prefix`, the AWS account ID, and `aws_region`. It covers the bucket
-  controls read and managed by Terraform and the temporary objects used by
-  Ansible.
+  from `name_prefix`, the AWS account ID, and `aws_region`. It covers every
+  bucket control read during the AWS provider's `aws_s3_bucket` refresh, the
+  controls managed by the standalone bucket resources, both current S3 bucket
+  tagging APIs and their compatibility fallback, and the temporary objects used
+  by Ansible.
+- The infrastructure policy includes update operations used in place by this
+  configuration: security-group rule changes, EBS volume resizing, EFS
+  file-system updates, and EFS mount-target security-group changes.
 - The infrastructure policy permits creation of only the Amazon EFS
   service-linked role, constrained by both its exact role ARN and the
   `iam:AWSServiceName` condition. This is needed only when EFS first creates the
@@ -55,6 +60,16 @@ The role contains the permissions required by the deployment workflow:
 Keep backend-state permissions separate from transfer-bucket permissions; the
 current state policy is deliberately limited to the two Terraform state keys
 and their lock object.
+
+Changes to this directory do not update the already-created deployment role
+until an administrator applies the persistent identity root. After changing an
+IAM policy, apply it before rerunning the disposable deployment:
+
+```bash
+terraform -chdir=terraform/identity init -reconfigure
+terraform -chdir=terraform/identity plan -out=identity.tfplan
+terraform -chdir=terraform/identity apply identity.tfplan
+```
 
 After applying this root with administrator credentials, save
 `github_terraform_role_arn` as the non-secret GitHub environment variable
