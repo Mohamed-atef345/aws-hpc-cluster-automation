@@ -128,9 +128,7 @@
     - "pki-tomcatd@{{ freeipa_pki_server_instance }}.service"
     - "dirsrv@{{ freeipa_directory_server_instance }}.service"
   failed_when: false
-  when:
-    - freeipa_server_configured.rc != 0
-    - freeipa_server_state.stat.exists | default(false)
+  when: freeipa_server_configured.rc != 0
 
 - name: Clean up an incomplete FreeIPA installation
   ansible.builtin.command:
@@ -140,9 +138,7 @@
       - --unattended
   changed_when: true
   failed_when: false
-  when:
-    - freeipa_server_configured.rc != 0
-    - freeipa_server_state.stat.exists | default(false)
+  when: freeipa_server_configured.rc != 0
 
 - name: Check for a residual PKI server instance
   ansible.builtin.stat:
@@ -200,9 +196,7 @@
     - /var/lib/sss/mc
     - /var/log/ipa
     - /root/ipa.csr
-  when:
-    - freeipa_server_configured.rc != 0
-    - freeipa_server_state.stat.exists | default(false)
+  when: freeipa_server_configured.rc != 0
 
 - name: Wait for LDAP ports to be released after cleanup
   ansible.builtin.wait_for:
@@ -213,9 +207,16 @@
   loop:
     - 389
     - 636
-  when:
-    - freeipa_server_configured.rc != 0
-    - freeipa_server_state.stat.exists | default(false)
+  when: freeipa_server_configured.rc != 0
+
+- name: Ensure /etc/ipa directory exists for the installer
+  ansible.builtin.file:
+    path: /etc/ipa
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+  when: freeipa_server_configured.rc != 0
 
 - name: Retrieve FreeIPA credentials from Secrets Manager
   ansible.builtin.shell: |
