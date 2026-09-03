@@ -1,0 +1,36 @@
+---
+
+- name: Install FreeIPA server
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/flock
+      - --nonblock
+      - --conflict-exit-code
+      - "75"
+      - /run/freeipa-server-install.lock
+      - /usr/sbin/ipa-server-install
+      - --unattended
+      - --hostname
+      - "{{ freeipa_server_fqdn }}"
+      - --ip-address
+      - "{{ freeipa_server_ip }}"
+      - --domain
+      - "{{ freeipa_domain }}"
+      - --realm
+      - "{{ freeipa_realm }}"
+      - --setup-dns
+      - --forwarder
+      - "{{ freeipa_dns_forwarder }}"
+      - --reverse-zone
+      - "{{ freeipa_reverse_zone }}"
+      - --no-dnssec-validation
+      - --no-host-dns
+      - --no-ntp
+      - --admin-password
+      - "{{ freeipa_admin_password }}"
+      - --ds-password
+      - "{{ freeipa_directory_manager_password }}"
+  register: freeipa_install_attempt
+  changed_when: freeipa_install_attempt.rc == 0
+  failed_when: false
+  no_log: true
