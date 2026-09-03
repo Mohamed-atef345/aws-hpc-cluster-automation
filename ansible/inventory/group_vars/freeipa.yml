@@ -1,3 +1,4 @@
+---
 freeipa_domain: cluster.internal
 freeipa_realm: CLUSTER.INTERNAL
 freeipa_shortname: ipa01

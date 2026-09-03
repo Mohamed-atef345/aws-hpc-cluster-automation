@@ -2,9 +2,9 @@
 - name: Confirm that the instance role is FreeIPA
   ansible.builtin.assert:
     that:
-      - ec2_tags is defined
-      - ec2_tags['Role'] is defined
-      - ec2_tags['Role'] == 'freeipa'
+      - aws_ec2_tags is defined
+      - aws_ec2_tags['Role'] is defined
+      - aws_ec2_tags['Role'] == 'freeipa'
     fail_msg: "The EC2 instance is not tagged with Role=freeipa."
 
 - name: Create an isolated directory for the Kerberos credential cache

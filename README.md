@@ -461,7 +461,7 @@ bootstrap step and consumed directly from AWS Secrets Manager.
 │   └── modules/               # Network, compute, storage, IAM, and security
 ├── ansible/
 │   ├── inventory/             # Dynamic EC2 inventory over SSM
-│   ├── group_vars/            # Cluster and node-role variables
+│   │   └── group_vars/        # Cluster and node-role variables
 │   ├── playbooks/             # Configuration and runtime validation
 │   └── roles/                 # Identity, storage, MUNGE, MariaDB, and Slurm
 ├── ARCHITECTURE.md            # Architecture decisions and rationale
