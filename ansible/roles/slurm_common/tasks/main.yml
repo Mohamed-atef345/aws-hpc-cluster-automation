@@ -5,6 +5,24 @@
     enablerepo: crb
     state: present
 
+- name: Create the Slurm service group
+  ansible.builtin.group:
+    name: slurm
+    gid: "{{ slurm_service_gid }}"
+    system: true
+    state: present
+
+- name: Create the Slurm service user
+  ansible.builtin.user:
+    name: slurm
+    uid: "{{ slurm_service_uid }}"
+    group: slurm
+    home: /var/lib/slurm
+    shell: /sbin/nologin
+    create_home: false
+    system: true
+    state: present
+
 - name: Create root-owned Slurm directories
   ansible.builtin.file:
     path: "{{ item }}"
