@@ -1,3 +1,4 @@
+---
 slurm_controller_service: slurmctld
 slurmdbd_service: slurmdbd
 mariadb_service: mariadb

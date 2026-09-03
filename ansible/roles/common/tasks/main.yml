@@ -2,10 +2,14 @@
 - name: Verify the machines are running Rocky Linux 9
   ansible.builtin.assert:
     that:
-      - ansible_distribution == "Rocky"
-      - ansible_distribution_major_version == "9"
-      - ansible_python.version.major == 3
-    fail_msg: "Host {{ inventory_hostname }} is running {{ ansible_distribution }} {{ ansible_distribution_version }}, but Rocky Linux 9 is required."
+      - ansible_facts['distribution'] == "Rocky"
+      - ansible_facts['distribution_major_version'] == "9"
+      - ansible_facts['python']['version']['major'] == 3
+    fail_msg: >-
+      Host {{ inventory_hostname }} is running
+      {{ ansible_facts['distribution'] }}
+      {{ ansible_facts['distribution_version'] }}, but Rocky Linux 9 is
+      required.
     success_msg: "Host {{ inventory_hostname }} OS verification passed (Rocky Linux 9)."
 
 - name: Verify required AWS inventory metadata
@@ -13,13 +17,13 @@
     that:
       - cluster_domain is defined
       - cluster_domain | length > 0
-      - ec2_tags is defined
-      - ec2_tags['NodeName'] is defined
-      - ec2_tags['NodeName'] | length > 0
-      - ec2_tags['Role'] is defined
-      - ec2_tags['Role'] in ['freeipa', 'controller', 'login', 'compute']
-      - private_ip_address is defined
-      - private_ip_address | length > 0
+      - aws_ec2_tags is defined
+      - aws_ec2_tags['NodeName'] is defined
+      - aws_ec2_tags['NodeName'] | length > 0
+      - aws_ec2_tags['Role'] is defined
+      - aws_ec2_tags['Role'] in ['freeipa', 'controller', 'login', 'compute']
+      - aws_private_ip_address is defined
+      - aws_private_ip_address | length > 0
     fail_msg: "Host {{ inventory_hostname }} is missing required EC2 tags, its private IP address, or the cluster domain."
 
 - name: Install needed common packages
@@ -89,7 +93,7 @@
 
 - name: Set FQDN hostname for all machines
   ansible.builtin.hostname:
-    name: "{{ ec2_tags['NodeName'] }}.{{ cluster_domain }}"
+    name: "{{ aws_ec2_tags['NodeName'] }}.{{ cluster_domain }}"
 
 - name: Read the configured timezone
   ansible.builtin.command:
@@ -116,43 +120,43 @@
     marker: "# {mark} ANSIBLE MANAGED CLUSTER HOSTS"
     block: |
       {% for host in groups['all'] | sort %}
-      {% set node_name = hostvars[host]['ec2_tags']['NodeName'] %}
-      {{ hostvars[host]['private_ip_address'] }}  {{ node_name }}.{{ cluster_domain }}  {{ node_name }}
+      {% set node_name = hostvars[host]['aws_ec2_tags']['NodeName'] %}
+      {{ hostvars[host]['aws_private_ip_address'] }}  {{ node_name }}.{{ cluster_domain }}  {{ node_name }}
       {% endfor %}
 
 - name: Verify the configured fully qualified hostname
   ansible.builtin.command: hostname --fqdn
   register: configured_fqdn
   changed_when: false
-  failed_when: configured_fqdn.stdout | trim != ec2_tags['NodeName'] ~ '.' ~ cluster_domain
+  failed_when: configured_fqdn.stdout | trim != aws_ec2_tags['NodeName'] ~ '.' ~ cluster_domain
 
 - name: Verify the configured short hostname
   ansible.builtin.command: hostname --short
   register: configured_shortname
   changed_when: false
-  failed_when: configured_shortname.stdout | trim != ec2_tags['NodeName']
+  failed_when: configured_shortname.stdout | trim != aws_ec2_tags['NodeName']
 
 - name: Verify temporary fully qualified cluster name resolution
   ansible.builtin.command:
     argv:
       - getent
       - ahostsv4
-      - "{{ hostvars[item]['ec2_tags']['NodeName'] }}.{{ cluster_domain }}"
+      - "{{ hostvars[item]['aws_ec2_tags']['NodeName'] }}.{{ cluster_domain }}"
   loop: "{{ groups['all'] | sort }}"
   register: cluster_fqdn_lookup
   changed_when: false
-  failed_when: cluster_fqdn_lookup.rc != 0 or hostvars[item]['private_ip_address'] not in cluster_fqdn_lookup.stdout
+  failed_when: cluster_fqdn_lookup.rc != 0 or hostvars[item]['aws_private_ip_address'] not in cluster_fqdn_lookup.stdout
 
 - name: Verify temporary short cluster name resolution
   ansible.builtin.command:
     argv:
       - getent
       - ahostsv4
-      - "{{ hostvars[item]['ec2_tags']['NodeName'] }}"
+      - "{{ hostvars[item]['aws_ec2_tags']['NodeName'] }}"
   loop: "{{ groups['all'] | sort }}"
   register: cluster_shortname_lookup
   changed_when: false
-  failed_when: cluster_shortname_lookup.rc != 0 or hostvars[item]['private_ip_address'] not in cluster_shortname_lookup.stdout
+  failed_when: cluster_shortname_lookup.rc != 0 or hostvars[item]['aws_private_ip_address'] not in cluster_shortname_lookup.stdout
 
 - name: Mark common role as completed
   ansible.builtin.set_fact:

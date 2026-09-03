@@ -10,10 +10,10 @@
 - name: Confirm that the instance role is a valid FreeIPA client
   ansible.builtin.assert:
     that:
-      - ec2_tags is defined
-      - ec2_tags['Role'] is defined
-      - ec2_tags['Role'] in ['controller', 'login', 'compute']
-    fail_msg: "The instance Role tag must be one of ['controller', 'login', 'compute'], but got '{{ ec2_tags.Role | default('undefined') }}'."
+      - aws_ec2_tags is defined
+      - aws_ec2_tags['Role'] is defined
+      - aws_ec2_tags['Role'] in ['controller', 'login', 'compute']
+    fail_msg: "The instance Role tag must be one of ['controller', 'login', 'compute'], but got '{{ aws_ec2_tags.Role | default('undefined') }}'."
 
 - name: Test TCP connection to FreeIPA server ports
   ansible.builtin.wait_for:
@@ -119,8 +119,8 @@
     # 3. Obtain Kerberos ticket as admin in the isolated ccache
     printf '%s\n' "$admin_password" | kinit admin
 
-    client_fqdn="{{ ec2_tags['NodeName'] }}.{{ cluster_domain }}"
-    client_ip="{{ private_ip_address }}"
+    client_fqdn="{{ aws_ec2_tags['NodeName'] }}.{{ cluster_domain }}"
+    client_ip="{{ aws_private_ip_address }}"
 
     # 4. Pre-create client host and request random OTP (or refresh OTP if host exists)
     if ! otp_output="$(ipa host-add "$client_fqdn" --ip-address="$client_ip" --random 2>&1)"; then
@@ -151,7 +151,7 @@
     argv:
       - ipa-client-install
       - --unattended
-      - --hostname={{ ec2_tags['NodeName'] }}.{{ cluster_domain }}
+      - --hostname={{ aws_ec2_tags['NodeName'] }}.{{ cluster_domain }}
       - --domain={{ freeipa_domain }}
       - --realm={{ freeipa_realm }}
       - --server={{ freeipa_server_fqdn }}
