@@ -154,8 +154,111 @@
           Another FreeIPA installation is already running:
           {{ freeipa_running_installers.stdout }}
 
-    - name: Recover any incomplete FreeIPA installation
-      ansible.builtin.include_tasks: cleanup.yml
+    - name: Check for incomplete FreeIPA installation indicators
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop: "{{ freeipa_partial_install_indicators }}"
+      register: freeipa_partial_indicator_stats
+
+    - name: Determine whether incomplete FreeIPA state exists
+      ansible.builtin.set_fact:
+        freeipa_cleanup_required: >-
+          {{
+            freeipa_partial_indicator_stats.results |
+            selectattr('stat.exists') |
+            list |
+            length > 0
+          }}
+
+    - name: Run the supported FreeIPA uninstaller for incomplete state
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/flock
+          - --nonblock
+          - --conflict-exit-code
+          - "75"
+          - /run/freeipa-server-install.lock
+          - /usr/sbin/ipa-server-install
+          - --uninstall
+          - --unattended
+      register: freeipa_uninstall_attempt
+      changed_when: true
+      failed_when: false
+      when: freeipa_cleanup_required | bool
+
+    - name: Stop cleanup if another automation owns the installation lock
+      ansible.builtin.fail:
+        msg: "Another automation run is modifying FreeIPA on this server."
+      when:
+        - freeipa_cleanup_required | bool
+        - freeipa_uninstall_attempt.rc == 75
+
+    - name: Check for residual PKI and Directory Server instances
+      ansible.builtin.stat:
+        path: "{{ item }}"
+      loop:
+        - "{{ freeipa_pki_server_path }}"
+        - "{{ freeipa_directory_server_path }}"
+      register: freeipa_residual_instance_stats
+      when: freeipa_cleanup_required | bool
+
+    - name: Stop services belonging to an incomplete FreeIPA installation
+      ansible.builtin.systemd_service:
+        name: "{{ item }}"
+        enabled: false
+        state: stopped
+      loop: "{{ freeipa_partial_install_services }}"
+      failed_when: false
+      when: freeipa_cleanup_required | bool
+
+    - name: Remove a residual PKI server instance
+      ansible.builtin.command:
+        argv:
+          - pki-server
+          - remove
+          - --force
+          - --remove-conf
+          - "{{ freeipa_pki_server_instance }}"
+      changed_when: true
+      when:
+        - freeipa_cleanup_required | bool
+        - freeipa_residual_instance_stats.results[0].stat.exists | default(false)
+
+    - name: Remove a residual Directory Server instance
+      ansible.builtin.command:
+        argv:
+          - dsctl
+          - "{{ freeipa_directory_server_instance }}"
+          - remove
+          - --do-it
+      changed_when: true
+      when:
+        - freeipa_cleanup_required | bool
+        - freeipa_residual_instance_stats.results[1].stat.exists | default(false)
+
+    - name: Remove stale FreeIPA bootstrap artifacts
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: absent
+      loop: "{{ freeipa_partial_install_artifacts }}"
+      when: freeipa_cleanup_required | bool
+
+    - name: Ensure FreeIPA state directories exist after cleanup
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "0755"
+      loop: "{{ freeipa_state_directories }}"
+
+    - name: Wait for FreeIPA TCP ports to remain free
+      ansible.builtin.wait_for:
+        port: "{{ item }}"
+        state: stopped
+        timeout: 60
+      loop: "{{ freeipa_required_tcp_ports }}"
+      when: freeipa_cleanup_required | bool
 
     - name: Confirm required FreeIPA TCP ports are available
       ansible.builtin.wait_for:
@@ -165,27 +268,227 @@
       loop: "{{ freeipa_required_tcp_ports }}"
 
     - name: Run the first FreeIPA installation attempt
-      ansible.builtin.include_tasks: install.yml
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/flock
+          - --nonblock
+          - --conflict-exit-code
+          - "75"
+          - /run/freeipa-server-install.lock
+          - /usr/sbin/ipa-server-install
+          - --unattended
+          - --hostname
+          - "{{ freeipa_server_fqdn }}"
+          - --ip-address
+          - "{{ freeipa_server_ip }}"
+          - --domain
+          - "{{ freeipa_domain }}"
+          - --realm
+          - "{{ freeipa_realm }}"
+          - --setup-dns
+          - --forwarder
+          - "{{ freeipa_dns_forwarder }}"
+          - --reverse-zone
+          - "{{ freeipa_reverse_zone }}"
+          - --no-dnssec-validation
+          - --no-host-dns
+          - --no-ntp
+          - --admin-password
+          - "{{ freeipa_admin_password }}"
+          - --ds-password
+          - "{{ freeipa_directory_manager_password }}"
+      register: freeipa_install_attempt
+      changed_when: freeipa_install_attempt.rc == 0
+      failed_when: false
+      no_log: true
 
     - name: Diagnose and retry a failed FreeIPA installation once
       when: freeipa_install_attempt.rc not in [0, 75]
       block:
-        - name: Collect the first FreeIPA installation failure
-          ansible.builtin.include_tasks: diagnose.yml
+        - name: Read the first FreeIPA installation errors
+          ansible.builtin.shell: |
+            set -o pipefail
+            grep -Ei \
+              'error|critical|exception|failed|requires|currently in use|unable|invalid' \
+              /var/log/ipaserver-install.log 2>/dev/null |
+              tail -n 120
+          args:
+            executable: /bin/bash
+          register: freeipa_install_diagnostics
+          changed_when: false
+          failed_when: false
 
-        - name: Clean state created by the failed installation
-          ansible.builtin.include_tasks: cleanup.yml
+        - name: Display the first FreeIPA installation errors
+          ansible.builtin.debug:
+            var: freeipa_install_diagnostics.stdout_lines
+
+        - name: Check retry cleanup indicators
+          ansible.builtin.stat:
+            path: "{{ item }}"
+          loop: "{{ freeipa_partial_install_indicators }}"
+          register: freeipa_partial_indicator_stats
+
+        - name: Determine whether retry cleanup is required
+          ansible.builtin.set_fact:
+            freeipa_cleanup_required: >-
+              {{
+                freeipa_partial_indicator_stats.results |
+                selectattr('stat.exists') |
+                list |
+                length > 0
+              }}
+
+        - name: Run the supported FreeIPA uninstaller before retry
+          ansible.builtin.command:
+            argv:
+              - /usr/bin/flock
+              - --nonblock
+              - --conflict-exit-code
+              - "75"
+              - /run/freeipa-server-install.lock
+              - /usr/sbin/ipa-server-install
+              - --uninstall
+              - --unattended
+          register: freeipa_uninstall_attempt
+          changed_when: true
+          failed_when: false
+          when: freeipa_cleanup_required | bool
+
+        - name: Stop retry if another automation owns the installation lock
+          ansible.builtin.fail:
+            msg: "Another automation run is modifying FreeIPA on this server."
+          when:
+            - freeipa_cleanup_required | bool
+            - freeipa_uninstall_attempt.rc == 75
+
+        - name: Check residual instances before retry
+          ansible.builtin.stat:
+            path: "{{ item }}"
+          loop:
+            - "{{ freeipa_pki_server_path }}"
+            - "{{ freeipa_directory_server_path }}"
+          register: freeipa_residual_instance_stats
+          when: freeipa_cleanup_required | bool
+
+        - name: Stop incomplete FreeIPA services before retry
+          ansible.builtin.systemd_service:
+            name: "{{ item }}"
+            enabled: false
+            state: stopped
+          loop: "{{ freeipa_partial_install_services }}"
+          failed_when: false
+          when: freeipa_cleanup_required | bool
+
+        - name: Remove the residual PKI server instance before retry
+          ansible.builtin.command:
+            argv:
+              - pki-server
+              - remove
+              - --force
+              - --remove-conf
+              - "{{ freeipa_pki_server_instance }}"
+          changed_when: true
+          when:
+            - freeipa_cleanup_required | bool
+            - >-
+              freeipa_residual_instance_stats.results[0].stat.exists |
+              default(false)
+
+        - name: Remove the residual Directory Server instance before retry
+          ansible.builtin.command:
+            argv:
+              - dsctl
+              - "{{ freeipa_directory_server_instance }}"
+              - remove
+              - --do-it
+          changed_when: true
+          when:
+            - freeipa_cleanup_required | bool
+            - >-
+              freeipa_residual_instance_stats.results[1].stat.exists |
+              default(false)
+
+        - name: Remove stale FreeIPA bootstrap artifacts before retry
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: absent
+          loop: "{{ freeipa_partial_install_artifacts }}"
+          when: freeipa_cleanup_required | bool
+
+        - name: Ensure FreeIPA state directories exist before retry
+          ansible.builtin.file:
+            path: "{{ item }}"
+            state: directory
+            owner: root
+            group: root
+            mode: "0755"
+          loop: "{{ freeipa_state_directories }}"
+
+        - name: Wait for FreeIPA TCP ports to remain free before retry
+          ansible.builtin.wait_for:
+            port: "{{ item }}"
+            state: stopped
+            timeout: 60
+          loop: "{{ freeipa_required_tcp_ports }}"
+          when: freeipa_cleanup_required | bool
 
         - name: Run the second FreeIPA installation attempt
-          ansible.builtin.include_tasks: install.yml
+          ansible.builtin.command:
+            argv:
+              - /usr/bin/flock
+              - --nonblock
+              - --conflict-exit-code
+              - "75"
+              - /run/freeipa-server-install.lock
+              - /usr/sbin/ipa-server-install
+              - --unattended
+              - --hostname
+              - "{{ freeipa_server_fqdn }}"
+              - --ip-address
+              - "{{ freeipa_server_ip }}"
+              - --domain
+              - "{{ freeipa_domain }}"
+              - --realm
+              - "{{ freeipa_realm }}"
+              - --setup-dns
+              - --forwarder
+              - "{{ freeipa_dns_forwarder }}"
+              - --reverse-zone
+              - "{{ freeipa_reverse_zone }}"
+              - --no-dnssec-validation
+              - --no-host-dns
+              - --no-ntp
+              - --admin-password
+              - "{{ freeipa_admin_password }}"
+              - --ds-password
+              - "{{ freeipa_directory_manager_password }}"
+          register: freeipa_install_attempt
+          changed_when: freeipa_install_attempt.rc == 0
+          failed_when: false
+          no_log: true
 
     - name: Stop if another automation owns the installation lock
       ansible.builtin.fail:
         msg: "Another automation run is installing FreeIPA on this server."
       when: freeipa_install_attempt.rc == 75
 
-    - name: Collect the final FreeIPA installation failure
-      ansible.builtin.include_tasks: diagnose.yml
+    - name: Read the final FreeIPA installation errors
+      ansible.builtin.shell: |
+        set -o pipefail
+        grep -Ei \
+          'error|critical|exception|failed|requires|currently in use|unable|invalid' \
+          /var/log/ipaserver-install.log 2>/dev/null |
+          tail -n 120
+      args:
+        executable: /bin/bash
+      register: freeipa_install_diagnostics
+      changed_when: false
+      failed_when: false
+      when: freeipa_install_attempt.rc not in [0, 75]
+
+    - name: Display the final FreeIPA installation errors
+      ansible.builtin.debug:
+        var: freeipa_install_diagnostics.stdout_lines
       when: freeipa_install_attempt.rc not in [0, 75]
 
     - name: Confirm a FreeIPA installation attempt succeeded
